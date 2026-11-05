@@ -59,10 +59,12 @@ location.reload()
 | 情况 | 行为 |
 |---|---|
 | 回答比一屏长 | ✅ 滚到回答开头 |
-| 回答比一屏短 | ⏭️ 不滚（避免页面乱跳） |
+| 回答短于视口 1/4（且 <80px） | ⏭️ 不滚（避免页面乱跳） |
 | 历史消息加载 | ⏭️ 不滚（只对最后一轮生效） |
 | 流式输出中 | ⏭️ 不滚（等真正结束才动） |
 | 启动后首次进入会话 | ✅ 跳到最后一轮回答开头（整个页面生命周期只一次，切会话不重复） |
+
+> 阈值可在控制台临时调：`__dshAnswerTop.setThreshold(0.15, 40)`（刷新后恢复默认 0.25 / 80px）。
 
 ## 开关
 
@@ -364,5 +366,6 @@ __dshAnswerTop.forceScroll()  // 手动滚动最后一轮
 __dshAnswerTop.info()          // 内部状态（detections / scrolls / lastSkip）
 __dshAnswerTop.diagnose()      // slot 注册体检 + 共存探测结果
 __dshAnswerTop.moduleIds()     // 模块名单 id（核对共存插件 id 格式）
+__dshAnswerTop.setThreshold(0.15, 40)  // 临时调低回滚阈值（不持久化）
 __dshAnswerTop.teardown()      // 手动全量清理（验证「卸载后零残留」用）
 ```

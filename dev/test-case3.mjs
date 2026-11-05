@@ -10,8 +10,9 @@ import vm from "node:vm";
 const CODE = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
 const CONFIG_KEY = "dsh-answer-top:config";
 
-function makeHarness() {
+function makeHarness(opts = {}) {
   const store = { [CONFIG_KEY]: JSON.stringify({ v: 1, enabled: true, sessions: {} }) };
+  const bottom = opts.bottom === undefined ? 2000 : opts.bottom;
 
   /* 假滚动容器 */
   const scrollCalls = [];
@@ -29,11 +30,11 @@ function makeHarness() {
     },
   };
 
-  /* 假 turn 节点：一个 assistant-step，够高（1900px > 800*0.55） */
+  /* 假 turn 节点：一个 assistant-step，高度由 opts.bottom 控制 */
   const turnNodes = [
     {
       dataset: { chatFlowKind: "assistant-step" },
-      getBoundingClientRect: () => ({ top: 100, bottom: 2000 }),
+      getBoundingClientRect: () => ({ top: 100, bottom }),
     },
   ];
 
@@ -196,6 +197,34 @@ console.log("\n=== ⑥ R2：监听资源表 ===");
   h.apply();
   const info = h.api().info();
   check("info 暴露 listenerRegistry", Array.isArray(info.listenerRegistry), typeof info.listenerRegistry);
+}
+
+/* ── ⑦ 阈值 0.25 / 80px：短回答也要跳 ── */
+console.log("\n=== ⑦ 回滚阈值（0.25 / 80px） ===");
+{
+  // 视口 800 → 阈值 max(80, 200) = 200；blockH = 300 - 100 = 200 → 刚好够
+  const h = makeHarness({ bottom: 300 });
+  h.apply();
+  const ok = h.api().forceScroll();
+  check("blockH=200 达到阈值 → 滚", ok === true, String(ok));
+  check("lastTarget.threshold = 200", h.api().info().lastTarget.threshold === 200, String(h.api().info().lastTarget.threshold));
+}
+{
+  // blockH = 250 - 100 = 150 < 200 → 不滚
+  const h = makeHarness({ bottom: 250 });
+  h.apply();
+  const ok = h.api().forceScroll();
+  check("blockH=150 低于阈值 → 不滚", ok === false, String(ok));
+  check("lastSkip 标 short-block", String(h.api().info().lastSkip).startsWith("short-block"), String(h.api().info().lastSkip));
+}
+{
+  // 运行时把阈值降到 0.1 / 40 → 150 也能滚
+  const h = makeHarness({ bottom: 250 });
+  h.apply();
+  h.api().setThreshold(0.1, 40);
+  const ok = h.api().forceScroll();
+  check("setThreshold 调低后可滚", ok === true, String(ok));
+  check("setThreshold 返回新值", JSON.stringify(h.api().setThreshold()) === '{"ratio":0.1,"px":40}', JSON.stringify(h.api().setThreshold()));
 }
 
 console.log("\n" + "=".repeat(50));

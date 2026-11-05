@@ -2,6 +2,14 @@
 
 All notable changes to `dsh-answer-top`.
 
+## [0.11.2]
+
+### Changed
+
+- 回滚触发阈值从「视口的 55%」降到 **25%，绝对下限 80px**：
+  小窗口下短一些的回答也会跳到开头。
+- 新增 `__dshAnswerTop.setThreshold(ratio, px)` 运行时调参（不持久化）。
+
 ## [0.11.1]
 
 ### Changed

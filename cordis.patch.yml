@@ -1,0 +1,5 @@
+# Bundle patch for dsh-answer-top.
+# 这个插件只做浏览器端的事（滚动），宿主侧是一个空插件。
+- insert:
+    - id: dsh-answer-top
+      name: dsh-answer-top

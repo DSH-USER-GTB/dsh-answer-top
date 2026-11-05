@@ -189,6 +189,18 @@ function skipReason(r) {
   check("额外 lastUserInputKind 已记录", info.lastUserInputKind === "wheel", String(info.lastUserInputKind));
 }
 
+/* ── case 9/10：DevTools 快捷键不算用户交互 ── */
+{
+  const r = makeRunner();
+  r.apply();
+  const before = r.api().info().lastUserInputAt;
+  r.docHandlers["doc:keydown"]({ key: "I", ctrlKey: true, shiftKey: true });
+  check("case9 Ctrl+Shift+I 不记为交互", r.api().info().lastUserInputAt === before);
+
+  r.docHandlers["doc:keydown"]({ key: "F12" });
+  check("case10 F12 不记为交互", r.api().info().lastUserInputAt === before);
+}
+
 console.log("\n" + "=".repeat(50));
 console.log(`通过 ${pass}/${total}`);
 process.exit(pass === total ? 0 : 1);

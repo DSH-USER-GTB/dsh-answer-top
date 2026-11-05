@@ -1,6 +1,6 @@
 {
   "name": "dsh-answer-top",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "回答完毕后自动滚到回答开头——不用每次往上翻",
   "type": "module",
   "main": "lib/index.js",

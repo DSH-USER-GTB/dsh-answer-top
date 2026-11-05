@@ -2,6 +2,14 @@
 
 All notable changes to `dsh-answer-top`.
 
+## [0.11.1]
+
+### Changed
+
+- 安装说明改为 npm 包名（`dsh plugin add dsh-answer-top` / 设置 → 插件 → 添加插件），
+  本地开发才用 `link:`。
+- 首次发布到 npm。
+
 ## [0.11.0]
 
 ### Added

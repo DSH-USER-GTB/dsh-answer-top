@@ -139,9 +139,19 @@ dev/slot-contract.md  slot / DOM 契约笔记
 
 ## 安装 / 卸载
 
+在 DSH 里：**设置 → 插件 → 添加插件**，输入包名 `dsh-answer-top`。
+
+或者命令行：
+
+```bat
+dsh plugin --profile desktop add dsh-answer-top
+dsh plugin --profile desktop remove dsh-answer-top
+```
+
+本地开发（改代码即时生效）用 link：
+
 ```bat
 dsh plugin --profile desktop add link:<你的插件目录>
-dsh plugin --profile desktop remove dsh-answer-top
 ```
 
 装完**需要重启 DSH**（bundle 层插件）。

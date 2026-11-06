@@ -8,18 +8,38 @@ AI 回答完，页面停在**末尾**。长回答要从头读，就得手动往�
 
 ## 设置（v0.6.1+）
 
-DSH 设置 → 左侧导航「自动回滚」→ 开关。
+DSH 设置 → 左侧导航「自动回滚」→ 顶部总开关 + 「触发阈值」两个滑块。
+
+### 触发阈值（v0.12.0+）
+
+| 控件 | 范围 | 默认 | 说明 |
+|---|---|---|---|
+| 最小回答高度 | 视口的 5%～100% | 25% | 回答低于「视口 × 该比例」时不滚 |
+| 绝对下限 | 0～200px | 80px | 无论窗口多大，回答低于这个高度都不滚（防止极短回答也跳动） |
+
+两条同时生效、**取更高的一条**：回答高度低于 `max(视口 × 25%, 80px)` 时不滚。
+拖动滑块立即生效并自动保存，刷新后保留；`?` 图标上悬停可看绝对下限的说明。
 
 ```json
-// localStorage['dsh-answer-top:config']
-{ "v": 1, "enabled": true, "sessions": {} }
+// localStorage['dsh-answer-top:config']（v0.12.0 起）
+{
+  "v": 1,
+  "enabled": true,
+  "sessions": {},
+  "threshold": { "ratio": 0.25, "px": 80 }
+}
 ```
 
 | 字段 | 说明 |
 |---|---|
-| `v` | 版本号，为未来迁移预留 |
+| `v` | 配置版本，仍为 `1`（新增字段向后兼容） |
 | `enabled` | 总开关，默认 `true` |
 | `sessions` | 预留空对象，首版恒空（按会话设置是 P2） |
+| `threshold.ratio` | 最小回答高度占视口的比例，`0.05`～`1`，默认 `0.25` |
+| `threshold.px` | 绝对下限像素，`0～200`，默认 `80` |
+
+旧版本写下的配置没有 `threshold` 字段，读取时自动回填 `{ ratio: 0.25, px: 80 }`，
+不会改写原存储；下次拖动滑块时才写回。
 
 **关闭后完全不滚**——不是「滚少一点」，是一次都不滚。
 
@@ -59,12 +79,14 @@ location.reload()
 | 情况 | 行为 |
 |---|---|
 | 回答比一屏长 | ✅ 滚到回答开头 |
-| 回答短于视口 1/4（且 <80px） | ⏭️ 不滚（避免页面乱跳） |
+| 回答短于 `max(视口 25%, 80px)` | ⏭️ 不滚（避免页面乱跳；阈值可在设置页调） |
 | 历史消息加载 | ⏭️ 不滚（只对最后一轮生效） |
+| turn 号识别失败（找不到对应回答块） | ⏭️ 不滚（绝不 fallback 到全部回答，避免误滚到对话开头） |
 | 流式输出中 | ⏭️ 不滚（等真正结束才动） |
 | 启动后首次进入会话 | ✅ 跳到最后一轮回答开头（整个页面生命周期只一次，切会话不重复） |
 
-> 阈值可在控制台临时调：`__dshAnswerTop.setThreshold(0.15, 40)`（刷新后恢复默认 0.25 / 80px）。
+> 阈值在设置页调（持久化）；控制台也可临时调：`__dshAnswerTop.setThreshold(0.15, 40)`
+> （不持久化，刷新后恢复配置值）。
 
 ## 开关
 
@@ -81,41 +103,90 @@ __dshAnswerTop.config()            // 看当前配置
 > v0.6.1 起配置存在 `dsh-answer-top:config`，旧键 `dsh-answer-top` 只用于一次性迁移，
 > 已被强制写成 `"off"`，**不要再手动改旧键**。
 
-## 与同类插件共存（v0.10.0）
+## 手动回滚按钮（v0.12.0+）
 
-如果同时启用了同样会「自动滚动/跳转」的插件，两个一起动会打架。插件启动时会读
+输入框下方的 dock（`conversation.composer.dock`）里常驻一个「⤒ 回滚」小按钮：
+
+- **始终显示**：不依赖自动回滚开关，也不依赖共存状态；
+- 点击 → 滚到最后一轮回答开头（即使自动回滚关闭、或检测到 `dsh-chat-answer-anchor`）；
+- 点击本身产生的 pointerdown 不会拦住它（手动路径跳过总开关、300ms 交互窗口和高度阈值）；
+- DOM 标记：`data-dsh-answer-top-manual="1"`，`title="回滚到回答开头"`。
+
+它和设置页开关是两个独立 slot：开关切首选/备选（`settings.section` ↔ 对话头部）时，
+手动按钮不受影响；`teardown()` 会把两个 slot 一起注销。
+
+## 与同类插件共存（v0.10.0，v0.12.0 调整）
+
+如果同时启用了同样会「自动滚动/跳转」的插件，两个一起动会打架。插件会读
 `ctx.modules` 的模块名单（纯内存，不走 loopback、不联网）：
 
 ```js
-// 命中的任一个都会闸住自动回滚
-["dsh-chat-answer-anchor", "dsh-jump-button"]
+// v0.12.0 起只把 dsh-chat-answer-anchor 视为冲突
+["dsh-chat-answer-anchor"]
 ```
 
-- 命中后**只关自动路径**：回答结束不再自动滚；
-- 手动 `__dshAnswerTop.forceScroll()` 不受影响；
-- 探测不到（`ctx.modules` 不可用 / 形状不符）时**不降级**——宁可不动，不误伤；
-- 启动同步探测一次，1.5 秒后复检一次（兄弟插件可能加载更晚），随后定格。
+- 命中后**只关自动路径**：回答结束不再自动滚，设置页会显示
+  「检测到 dsh-chat-answer-anchor，已暂停自动回滚」；
+- 手动 `__dshAnswerTop.forceScroll()` 与输入框下方的「⤒ 回滚」按钮都不受影响；
+- **自动恢复**：每 800ms 轻量重检一次名单，同会话里禁用/启用 anchor 会自动暂停/恢复
+  自动回滚；只在状态变化时记 1 条事件，不刷日志；
+- **探测失败不降级**：`ctx.modules` 不可用 / 形状不符时保持上一次结论——宁可不动，不误伤；
+- `dsh-jump-button` 不再算冲突（v0.12.0 起）：只装它时自动回滚照常工作。
 
 看探测结果：
 
 ```js
-__dshAnswerTop.info().coexistence   // { anchor, jumpButton, checked, probe }
+__dshAnswerTop.info().coexistence   // { anchor, checked, probe }
 __dshAnswerTop.diagnose().coexistence
 __dshAnswerTop.moduleIds()          // 核对目标插件 id 是否带 /client 后缀
 ```
 
-日志只记布尔：`errorType: "coexistence", anchor, jumpButton`（失败时 `probe: "failed"`）。
+日志只记布尔：`errorType: "coexistence", anchor`（失败时 `probe: "failed"`）。
 
 > 实现依赖 `ctx.modules`，所以 client 端 `exports.inject` 是 `["slots", "modules"]`。
 > 这和 package.json 里的 `dsh.client.inject: []` 不是一回事。
 
+## 数据与隐私
+
+**不联网、不上传。** 插件代码里没有任何 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon`，
+不向 DSH、GitHub 或任何第三方发送数据；宿主端 `lib/index.js` 是空插件（`apply` 不做任何事）。
+
+只在本机 `localStorage` 写两个键：
+
+| 键 | 内容 |
+|---|---|
+| `dsh-answer-top:config` | 设置：`v`、`enabled`、`sessions`（预留空对象）、`threshold.ratio`、`threshold.px` |
+| `dsh-answer-top:events` | 脱敏事件日志，最多 200 条 / 50KB，超出后丢最旧；连续相同事件折叠为一条并累加 `count` |
+
+事件日志只含这些字段：
+
+- `errorType`（`migrated` / `coexistence` / `cleanup` / `degraded` 等）、`at`（时间）、`v`（插件版本）、`count`；
+- 具体事件附带的**布尔或枚举**：`anchor`、`probe`、`scope`、`reason`、`rebind`、
+  `hadLegacyKey`、`legacyWasOff`、`enabled`。
+
+**不会记录**：消息/回答正文、会话 id、用户输入、文件路径、URL、页面内容、截图、原始错误文本。
+运行时为了去重会在内存里临时保存 turn 号和滚动位置，刷新即清空，不写入存储。
+共存探测只读取 `ctx.modules` 的模块 id 名单（纯内存），不落盘。
+
+清理方法（浏览器控制台）：
+
+```js
+localStorage.removeItem('dsh-answer-top:events')    // 只清日志
+localStorage.removeItem('dsh-answer-top:config')    // 连设置一起重置
+location.reload()
+```
+
+> 旧键 `dsh-answer-top` 只用于一次性迁移开关状态，迁移后会被写成 `"off"`，不含其他数据。
+> `__dshAnswerTop` 调试入口只活在当前页面内存里，刷新即清空。
+
 ## 原理
 
 ```
-1. 往 conversation.chat.turnTail 插一个隐藏锚点
-2. 锚点的祖先 [data-turn-tail] 出现 data-actions-reveal
+1. MutationObserver 监听 document.body（data-actions-reveal 属性变化）
+   + 800ms interval 兜底（漏事件 / 会话切换时补检）
+2. [data-turn-tail] 出现 data-actions-reveal
    → 说明这一轮回答结束了
-3. 找出本轮第一个 [data-chat-flow-kind="assistant"] 的节点
+3. 找出本轮第一个 [data-chat-flow-kind="assistant-step"] 的节点
 4. 把 [data-conversation-scroll] 滚到它的顶部
 ```
 
@@ -124,7 +195,7 @@ __dshAnswerTop.moduleIds()          // 核对目标插件 id 是否带 /client �
 ```
 [data-conversation-scroll]   滚动容器
 [data-chat-turn="N"]         第 N 轮的所有流节点
-[data-chat-flow-kind]        节点类型：user / assistant / turn-process / turn-tail
+[data-chat-flow-kind]        节点类型：user / assistant-step / tool-call / turn-process / turn-tail
 [data-turn-tail]             轮次末尾容器
 data-actions-reveal          该属性存在 = 本轮已结束
 ```
@@ -135,26 +206,21 @@ data-actions-reveal          该属性存在 = 本轮已结束
 lib/client.js      浏览器端逻辑（全部功能在这）
 lib/index.js       宿主端空插件
 cordis.patch.yml   bundle 挂载声明
-dev/*.mjs          本地回归测试（simulate + test-*，无需浏览器）
+dev/*.mjs          本地回归测试（11 个 test-* + simulate + verify-boot，共 13 个，无需浏览器）
 dev/slot-contract.md  slot / DOM 契约笔记
 ```
 
 ## 安装 / 卸载
 
-在 DSH 里：**设置 → 插件 → 添加插件**，输入包名 `dsh-answer-top`。
-
-或者命令行：
-
-```bat
-dsh plugin --profile desktop add dsh-answer-top
-dsh plugin --profile desktop remove dsh-answer-top
-```
-
-本地开发（改代码即时生效）用 link：
+在 DSH 里：**设置 → 插件 → 添加插件**，输入本地目录的 link 安装串
+（`link:<你的插件目录>`）。也可以命令行：
 
 ```bat
 dsh plugin --profile desktop add link:<你的插件目录>
+dsh plugin --profile desktop remove dsh-answer-top
 ```
+
+本地开发（改代码即时生效）也用同一条 link 命令；重新添加时保持目录不变即可。
 
 装完**需要重启 DSH**（bundle 层插件）。
 
@@ -162,7 +228,7 @@ dsh plugin --profile desktop add link:<你的插件目录>
 
 - 只对**最后一轮**生效——翻历史时不会乱跳
 - 依赖 DSH 的 DOM 契约，**升级 DSH 后如果失效**，多半是属性名变了
-- 滚动是平滑动画，如果觉得慢可以改成瞬时（改 `behavior: "smooth"` → `"auto"`）
+- v0.12.x 起改为**瞬时跳转**（`scrollTop` 直接赋值）；DSH 新滚动容器上 smooth 动画不生效
 
 ## 调试
 
@@ -239,9 +305,13 @@ node dev/simulate.mjs           :: 加载 + apply + 渲染
 node dev/test-cleanup.mjs       :: 资源清理 + 单实例
 node dev/test-events.mjs        :: 日志持久化 / 折叠 / 轮转
 node dev/test-degrade.mjs       :: 退避保活 + 平台改版
+node dev/test-redetect.mjs      :: 同 turn 重渲染不重复滚
 node dev/test-coexist.mjs       :: 共存探测（Item 8）
 node dev/test-user-input.mjs    :: 用户输入取消
 node dev/test-case3.mjs         :: 滚动复位三条路径
+node dev/test-bootjump.mjs      :: 启动首次跳转
+node dev/test-threshold.mjs     :: 阈值钳位 / 持久化
+node dev/test-manual.mjs        :: 手动按键（跨开关/共存/阈值）
 node dev/test-migration.mjs     :: 迁移幂等
 node dev/verify-boot.mjs        :: boot 激活
 ```
@@ -292,9 +362,10 @@ exports.apply = apply;
 __dshAnswerTop.info().lastSkip   // "user-input(wheel,180ms)" —— 可以看到跳过原因
 ```
 
-**② 滚动动画会被用户输入立即打断**
+**② 回滚是瞬时跳转，不再有动画打断**
 
-回滚是平滑动画。动画进行中你一滚，动画**立刻停止**（不是等它跑完），产生一次 `cancelCount`：
+v0.12.x 起用 `scrollTop` 直接赋值，跳转瞬间完成；`cancelCount` 字段保留兼容，
+但正常跳转路径通常保持 0：
 
 ```js
 __dshAnswerTop.info().cancelCount
@@ -318,6 +389,7 @@ __dshAnswerTop.info().cancelCount
 | 触发 | 清理内容 | 之后 |
 |---|---|---|
 | 页面卸载（`pagehide`，非 bfcache） | 摘全部监听、`clearInterval`、`MutationObserver.disconnect()`、清空重试/延时 timer、注销 slot | 页面没了，不重启 |
+| DSH 停上下文（`ctx.effect` disposer） | 同全量 teardown，reason = `context-stop` | interval / observer / 监听 / slot 全部停掉，不再空转 |
 | 会话切换（`scroller` 元素被替换） | 只摘 `wheel` / `touchmove` / `scrollend`，重新绑到新容器 | `observer` / `interval` 不重建，继续工作 |
 
 会话切换是靠「`scroller` 元素身份变化」探测的（800ms 内生效），不依赖 DSH 内部的会话服务钩子，
@@ -366,6 +438,9 @@ __dshAnswerTop.forceScroll()  // 手动滚动最后一轮
 __dshAnswerTop.info()          // 内部状态（detections / scrolls / lastSkip）
 __dshAnswerTop.diagnose()      // slot 注册体检 + 共存探测结果
 __dshAnswerTop.moduleIds()     // 模块名单 id（核对共存插件 id 格式）
-__dshAnswerTop.setThreshold(0.15, 40)  // 临时调低回滚阈值（不持久化）
+__dshAnswerTop.threshold()     // 当前生效阈值 { ratio, px }
+__dshAnswerTop.applyThreshold({ ratio: 0.15, px: 40 })  // 临时改（不持久化）
+__dshAnswerTop.saveThreshold({ ratio: 0.15, px: 40 })   // 改并持久化
+__dshAnswerTop.setThreshold(0.15, 40)  // 等价于 applyThreshold 的位置参数版（不持久化）
 __dshAnswerTop.teardown()      // 手动全量清理（验证「卸载后零残留」用）
 ```

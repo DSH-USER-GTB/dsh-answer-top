@@ -168,13 +168,13 @@ function skipReason(r) {
   check("case7 关闭 + 刚交互 → lastSkip = disabled（关闭优先）", reason === "disabled", String(reason));
 }
 
-/* ── case 8：程序自己的 scrollTo 不算用户交互 ── */
+/* ── case 8：程序自己的滚动不算用户交互 ── */
 {
   const r = makeRunner();
   r.apply();
-  // 我们的滚动用 scrollTo，不派发 wheel/keydown，所以监听器不会被触发
+  // 我们的滚动直接赋值 scrollTop，不派发 wheel/keydown，所以监听器不会被触发
   const before = r.api().info().lastUserInputAt;
-  r.api().forceScroll(); // 内部会调 scroller.scrollTo
+  r.api().forceScroll(); // 内部直接赋值 scroller.scrollTop
   const after = r.api().info().lastUserInputAt;
   check("case8 程序滚动不改变 lastUserInputAt", before === after, before + " → " + after);
 }

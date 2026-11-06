@@ -107,12 +107,18 @@ try {
 
 console.log("\n=== 2. 调用 apply(ctx) ===");
 const components = {};
+let coexistHintSeen = false;
 if (registered && typeof registered.apply === "function") {
   const calls = [];
   const fakeCtx = {
     effect: (fn, label) => {
       calls.push("effect(" + label + ")");
       fn();
+    },
+    modules: {
+      manifest: {
+        modules: [{ id: "dsh-answer-top" }, { id: "dsh-chat-answer-anchor" }],
+      },
     },
     slots: {
       inject: (name, fn, label) => {
@@ -160,12 +166,57 @@ if (typeof primary === "function") {
     }
     const sw = findSwitch(tree);
     console.log("     开关:", sw ? "✓ 找到（" + sw.props["data-dsh-answer-top-switch"] + "）" : "✗ 没找到");
+
+    function collect(node, pred, out = []) {
+      if (!node || typeof node !== "object") return out;
+      if (pred(node)) out.push(node);
+      for (const c of node.children || []) collect(c, pred, out);
+      return out;
+    }
+    const sliders = collect(tree, (n) => n.props && n.props["data-dsh-answer-top-slider"]);
+    console.log("     滑块数:", sliders.length, "（期望 2）");
+    for (const s of sliders) {
+      console.log(
+        "       " + s.props["data-dsh-answer-top-slider"] +
+        ": min=" + s.props.min + " max=" + s.props.max +
+        " step=" + s.props.step + " value=" + s.props.value +
+        " label=" + JSON.stringify(s.props["aria-label"])
+      );
+    }
+    const hint = collect(tree, (n) => n.props && n.props["data-dsh-answer-top-hint"])[0];
+    console.log("     ? 提示:", hint ? "✓ 原生 title " + hint.props.title.length + " 字" : "✗ 没有");
+
+    const coexistHint = collect(tree, (n) => n.props && n.props["data-dsh-answer-top-coexist-hint"])[0];
+    coexistHintSeen = !!coexistHint;
+    console.log(
+      "     共存提示:",
+      coexistHint ? "✓ " + JSON.stringify(coexistHint.children && coexistHint.children[0]) : "✗ 没找到"
+    );
     console.log("     标题文本:", JSON.stringify(tree.children?.[0]?.children?.[0]?.children?.[0] ?? null));
   } catch (e) {
     console.log("  ✗ 渲染抛错:", e.message);
   }
 } else {
   console.log("  ✗ 没注册 settings.section");
+}
+
+console.log("\n=== 3b. 渲染手动按键 conversation.composer.dock ===");
+const manual = components["conversation.composer.dock"];
+let manualSeen = false;
+if (typeof manual === "function") {
+  try {
+    hooksIndex = 0; hooksStore.length = 0;
+    const tree = deepRender(manual({}));
+    manualSeen = true;
+    console.log("  ✓ 渲染成功  type:", tree.type);
+    console.log("     data 属性:", tree.props["data-dsh-answer-top-manual"]);
+    console.log("     title:", JSON.stringify(tree.props.title));
+    console.log("     aria-label:", JSON.stringify(tree.props["aria-label"]));
+  } catch (e) {
+    console.log("  ✗ 渲染抛错:", e.message);
+  }
+} else {
+  console.log("  ✗ 没注册 conversation.composer.dock");
 }
 
 console.log("\n=== 4. 渲染备选组件 header ===");
@@ -196,6 +247,22 @@ if (api) {
     "  字段检查: v=" + cfg.v + " enabled=" + cfg.enabled +
     " sessions=" + JSON.stringify(cfg.sessions) + " → " + (okk ? "✓ 符合 schema" : "✗ 不符合")
   );
+  console.log("  初始 threshold:", JSON.stringify(cfg.threshold), "（期望 0.25 / 80）");
+
+  const t1 = api.saveThreshold({ ratio: 0.4, px: 120 });
+  console.log("  saveThreshold({0.4, 120}) →", JSON.stringify(t1));
+  const t2 = api.applyThreshold({ ratio: 5, px: 999 });
+  console.log("  applyThreshold({5, 999}) →", JSON.stringify(t2), "（期望钳到 1 / 200）");
+
+  const savedCfg = JSON.parse(store["dsh-answer-top:config"]);
+  const okt =
+    savedCfg.threshold &&
+    savedCfg.threshold.ratio === 0.4 &&
+    savedCfg.threshold.px === 120;
+  console.log(
+    "  持久化阈值检查: " + JSON.stringify(savedCfg.threshold) +
+    " → " + (okt ? "✓ 已写入" : "✗ 没写入")
+  );
 } else {
   console.log("  ✗ 没拿到 __dshAnswerTop");
 }
@@ -203,5 +270,9 @@ if (api) {
 console.log("\n=== 6. 验收摘要 ===");
 console.log("  首选 slot 注册:", components["settings.section"] ? "✓" : "✗");
 console.log("  组件可渲染:", typeof primary === "function" ? "✓" : "✗");
+console.log("  控件数（开关+2 滑块）:", (primary ? 1 : 0) + 2);
+console.log("  共存提示（anchor 命中）:", coexistHintSeen ? "✓" : "✗");
+console.log("  手动按键 slot 注册:", components["conversation.composer.dock"] ? "✓" : "✗");
+console.log("  手动按键可渲染:", manualSeen ? "✓" : "✗");
 
 

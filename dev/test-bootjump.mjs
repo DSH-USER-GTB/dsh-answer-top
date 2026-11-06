@@ -68,20 +68,25 @@ function makeHarness(opts = {}) {
     clock = end;
   }
 
-  /* ── 假滚动容器 ── */
+  /* ── 假滚动容器（v0.12.x：插件直接赋值 scrollTop，用 setter 记账） ── */
   const scrollCalls = [];
+  let scrollTopValue = 0;
   const scroller = {
-    scrollTop: 0,
     clientHeight: 800,
     scrollHeight: 6000,
     addEventListener() {},
     removeEventListener() {},
     getBoundingClientRect: () => ({ top: 0, height: 800 }),
-    scrollTo(opts2) {
-      scrollCalls.push(opts2);
-      if (opts2 && typeof opts2.top === "number") this.scrollTop = opts2.top;
-    },
+    /** 模拟 DSH 贴底：改位置但不算插件滚动 */
+    setScrollTop(v) { scrollTopValue = v; },
   };
+  Object.defineProperty(scroller, "scrollTop", {
+    get: () => scrollTopValue,
+    set: (v) => {
+      scrollTopValue = v;
+      scrollCalls.push({ top: v });
+    },
+  });
 
   /* ── 假 turn / tail ── */
   let turnNodes = [
@@ -91,11 +96,19 @@ function makeHarness(opts = {}) {
     },
   ];
   const tails = [];
-  function addTail(n, revealed = true) {
-    tails.push({
+  function makeTail(n, revealed = true) {
+    return {
       getAttribute: (k) => (k === "data-turn-tail" ? String(n) : null),
       hasAttribute: (k) => k === "data-actions-reveal" && revealed,
-    });
+    };
+  }
+  function addTail(n, revealed = true) {
+    tails.push(makeTail(n, revealed));
+  }
+  /** 模拟 DSH 空闲重渲染：同一个 turn，换成新的 DOM 节点 */
+  function replaceTail(n, revealed = true) {
+    if (tails.length) tails[tails.length - 1] = makeTail(n, revealed);
+    else tails.push(makeTail(n, revealed));
   }
 
   /* ── 假 MutationObserver ── */
@@ -186,6 +199,8 @@ function makeHarness(opts = {}) {
     scroller,
     addTail,
     setTurnNodes: (nodes) => { turnNodes = nodes; },
+    setScrollHeight: (v) => { scroller.scrollHeight = v; },
+    replaceTail,
     observers,
     advance,
   };
@@ -305,14 +320,14 @@ console.log("\n=== ⑧ 位置被覆盖 → 重跳 ===");
   const before = h.scrollCalls.length;
   check("首次已跳", before === 1, before);
 
-  h.scroller.scrollTop = 5000; // 模拟 DSH 布局完成后贴回底部
+  h.scroller.setScrollTop(5000); // 模拟 DSH 布局完成后贴回底部
   h.advance(1200); // 1.2s 后的校验
   check("检测到偏移并重跳", h.scrollCalls.length === before + 1, h.scrollCalls.length);
   check("重跳次数 = 1", h.api().info().bootJumpRetries === 1, h.api().info().bootJumpRetries);
 
   // 用户一旦交互，后续校验放手
   const afterRetry = h.scrollCalls.length;
-  h.scroller.scrollTop = 5000;
+  h.scroller.setScrollTop(5000);
   h.api().info().bootJumpAt = Date.now() - 5000;
   h.api().info().lastUserInputAt = Date.now();
   h.api().info().lastUserInputKind = "wheel";
@@ -331,6 +346,86 @@ console.log("\n=== ⑨ 单纯点击不取消启动跳转 ===");
   h.advance(2400);
   check("点击后仍然跳到开头", h.scrollCalls.length === 1, h.scrollCalls.length);
   check("bootJumps = 1", h.api().info().bootJumps === 1, h.api().info().bootJumps);
+}
+
+/* ── ⑩ 会话晚于插件出现（历史异步渲染）── */
+console.log("\n=== ⑩ 进入会话晚于插件启动 ===");
+{
+  const h = makeHarness();
+  h.apply();
+  h.advance(2400); // 前 2.4s 还没有任何 tail
+  check("没有 tail 时不跳", h.scrollCalls.length === 0, h.scrollCalls.length);
+  check("bootJumpDone 仍未置位", h.api().info().bootJumpDone === false);
+
+  h.addTail(1); // 会话这时才渲染出来
+  h.advance(2400);
+  check("tail 出现后自动跳（走检测路径）", h.scrollCalls.length === 1, h.scrollCalls.length);
+  check("检测计数 +1", h.api().info().detections === 1, h.api().info().detections);
+  // 这种时序下「历史渲染」会被当成一轮新回答，由检测路径完成跳转，
+  // bootJumps 保持 0 是预期；两条路径不会叠加。
+  check("两条路径不叠加", h.api().info().bootJumps === 0, h.api().info().bootJumps);
+}
+
+/* ── ⑪ 内容持续长高（markdown/代码块异步渲染）── */
+console.log("\n=== ⑪ scrollHeight 持续增长 → 等稳定再跳 ===");
+{
+  const h = makeHarness();
+  h.addTail(1);
+  h.apply();
+  h.advance(800); // tick1：tail 候选
+  h.advance(800); // tick2：高度 6000 候选
+  h.setScrollHeight(7000); // 内容又长高了
+  h.advance(800); // tick3：高度变了 → 重新等
+  check("高度变化时不跳", h.scrollCalls.length === 0, h.scrollCalls.length);
+  h.advance(800); // tick4：高度稳定
+  check("高度稳定后才跳", h.scrollCalls.length === 1, h.scrollCalls.length);
+}
+
+/* ── ⑫ DSH 反复贴底 → 重跳最多 3 次 ── */
+console.log("\n=== ⑫ 反复被贴底 → 重跳封顶 ===");
+{
+  const h = makeHarness();
+  h.addTail(1);
+  h.apply();
+  h.advance(2400); // 首次跳转
+  check("首次已跳", h.scrollCalls.length === 1, h.scrollCalls.length);
+
+  for (let i = 0; i < 4; i++) {
+    h.scroller.setScrollTop(5000); // 每一轮都被贴回底部
+    h.advance(1200);
+  }
+  check("最多重跳 3 次", h.api().info().bootJumpRetries === 3, h.api().info().bootJumpRetries);
+  check("总滚动次数 = 1 + 3", h.scrollCalls.length === 4, h.scrollCalls.length);
+}
+
+/* ── ⑬ 等待稳定期间用户滚轮 → 放弃 ── */
+console.log("\n=== ⑬ 等待期间用户滚动 → 放弃 ===");
+{
+  const h = makeHarness();
+  h.addTail(1);
+  h.apply();
+  h.advance(800); // 刚记录 tail 候选
+  h.api().info().lastUserInputAt = Date.now() - 500;
+  h.api().info().lastUserInputKind = "wheel";
+  h.advance(2400);
+  check("用户滚动后不跳", h.scrollCalls.length === 0, h.scrollCalls.length);
+  check("bootJumpDone = true", h.api().info().bootJumpDone === true);
+}
+
+/* ── ⑭ 空闲重渲染（同 turn 新节点）→ 不重复滚 ── */
+console.log("\n=== ⑭ 同一轮重渲染不重复跳 ===");
+{
+  const h = makeHarness();
+  h.addTail(1);
+  h.apply();
+  h.advance(2400); // 启动跳转完成
+  const before = h.scrollCalls.length;
+  check("启动时已跳", before === 1, before);
+
+  h.replaceTail(1); // DSH 空闲重渲染：turn 1，换成新节点
+  h.advance(2400);
+  check("同一 turn 重渲染不再滚", h.scrollCalls.length === before, h.scrollCalls.length);
+  check("detections 仍为 0", h.api().info().detections === 0, h.api().info().detections);
 }
 
 console.log("\n" + "=".repeat(50));

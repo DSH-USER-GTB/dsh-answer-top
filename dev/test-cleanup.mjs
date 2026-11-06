@@ -190,8 +190,13 @@ function makeHarness(opts = {}) {
   vm.runInContext(CODE, context, { filename: "client.js" });
 
   const slotCalls = { inject: 0, register: 0, unregisters: 0 };
+  const effectDisposers = [];
   const ctx = {
-    effect: (fn) => fn(),
+    effect: (fn) => {
+      const disposer = fn();
+      if (typeof disposer === "function") effectDisposers.push(disposer);
+      return disposer;
+    },
     slots: {
       inject: (name, factory) => {
         slotCalls.inject++;
@@ -217,6 +222,7 @@ function makeHarness(opts = {}) {
     winHandlers,
     docHandlers,
     slotCalls,
+    effectDisposers,
     timeouts,
     intervals,
     timer,
@@ -249,10 +255,18 @@ h.apply();
   check("state.observer = 'body'", info.observer === "body", String(info.observer));
   check("监听 6 条（scroller 3 + document 2 + pagehide 1）", countListeners(h) === 6, countListeners(h));
   check("boundScroller 记录了 scroller", info.boundScroller === h.scroller());
-  check("pendingTimers 有 1.5s 共存复检 + 8s 提示", info.pendingTimers.length === 2, info.pendingTimers.length);
+  check("pendingTimers 只有 8s 提示（共存改为 tick 轮询）", info.pendingTimers.length === 1, info.pendingTimers.length);
   check("retryTimers 为空（一次装好）", info.retryTimers.length === 0, info.retryTimers.length);
   check("applied = true", info.applied === true);
-  check("slot 注册一次", h.slotCalls.inject === 1, h.slotCalls.inject);
+  check("两个 slot 各注册一次（开关 + 手动）", h.slotCalls.inject === 2, h.slotCalls.inject);
+  const slotKeys = Object.keys(info.unregisterBySlot).sort();
+  check("unregisterBySlot 记录两个 slot",
+    JSON.stringify(slotKeys) === '["conversation.composer.dock","settings.section"]',
+    JSON.stringify(slotKeys));
+  check("手动按键 slot 已注册", info.manualSlotRegistered === true);
+  check("两个 slot 都有注销函数",
+    typeof info.unregisterBySlot["settings.section"] === "function" &&
+    typeof info.unregisterBySlot["conversation.composer.dock"] === "function");
 }
 
 /* ── ② 二次 apply：单实例 ── */
@@ -263,9 +277,9 @@ h.apply();
   const info = h.api().info();
   check("interval 仍只有 1 个", h.intervals.size === 1, h.intervals.size);
   check("observer 仍只有 1 个", h.observers.length === 1, h.observers.length);
-  check("slot 注入仍是 1 次", h.slotCalls.inject === 1, h.slotCalls.inject);
+  check("slot 注入仍是 2 次（没重复注册）", h.slotCalls.inject === 2, h.slotCalls.inject);
   check("监听没有翻倍", countListeners(h) === 6, countListeners(h));
-  check("8s 提示没重复登记", info.pendingTimers.length === 2, info.pendingTimers.length);
+  check("8s 提示没重复登记", info.pendingTimers.length === 1, info.pendingTimers.length);
 }
 
 /* ── ③ 一轮回答：检测 + 60ms 后滚动 ── */
@@ -274,11 +288,11 @@ h.addTurn(1);
 h.observers[0].fire();
 {
   check("detections = 1", h.api().info().detections === 1, h.api().info().detections);
-  check("60ms 定时器已登记", h.api().info().pendingTimers.length === 3, h.api().info().pendingTimers.length);
+  check("60ms 定时器已登记", h.api().info().pendingTimers.length === 2, h.api().info().pendingTimers.length);
   h.advance(60);
-  check("滚动发生", h.scrollCalls.length === 1, h.scrollCalls.length);
+  check("滚动发生（瞬时 scrollTop）", h.scroller().scrollTop > 0, h.scroller().scrollTop);
   check("scrolls = 1", h.api().info().scrolls === 1, h.api().info().scrolls);
-  check("scrolling = true（等 scrollend/兜底）", h.api().info().scrolling === true);
+  check("scrolling = false（瞬时跳转不进动画态）", h.api().info().scrolling === false);
 }
 
 /* ── ④ 会话切换：只重绑监听 ── */
@@ -329,7 +343,10 @@ h.winHandlers.pagehide({ persisted: false });
   check("installed = false", info.installed === false);
   check("scrolling = false", info.scrolling === false);
   check("boundScroller = null", info.boundScroller === null);
-  check("slot 已注销", h.slotCalls.unregisters === 1, h.slotCalls.unregisters);
+  check("两个 slot 都已注销", h.slotCalls.unregisters === 2, h.slotCalls.unregisters);
+  check("teardown 后 unregisterBySlot 为空", Object.keys(info.unregisterBySlot).length === 0, Object.keys(info.unregisterBySlot).length);
+  check("teardown 后手动 slot 标记复位", info.manualSlotRegistered === false && info.manualSlotMounted === false);
+  check("teardown 后 slot 标记复位", info.slotRegistered === false && info.slotMounted === false);
   const ev = info.events.find((e) => e.errorType === "cleanup" && e.scope === "full");
   check("打了 full 清理日志", !!ev);
   check("清理日志只记枚举", !!ev && ev.reason === "pagehide");
@@ -358,7 +375,7 @@ h2.apply();
   check("新 interval 只有一个", h2.intervals.size === 1, h2.intervals.size);
   check("新 observer 只有一个且连着", h2.observers.length === 2 && h2.observers[1].active === true, h2.observers.length);
   check("监听重新绑定", countListeners(h2) === 6, countListeners(h2));
-  check("slot 重新注册", h2.slotCalls.inject === 2, h2.slotCalls.inject);
+  check("slot 重新注册（两个 slot × 2 轮）", h2.slotCalls.inject === 4, h2.slotCalls.inject);
 }
 
 /* ── ⑨ 无 scroller：重试链登记 + 成功后清零 ── */
@@ -390,7 +407,7 @@ const allEvents = [h, h2, h3].flatMap((x) => x.api().info().events);
   const allowed = new Set([
     "errorType", "at", "v", "scope", "reason", "rebind",
     "hadLegacyKey", "legacyWasOff", "enabled",
-    "probe", "anchor", "jumpButton", "count",
+    "probe", "anchor", "count",
   ]);
   const badKey = allEvents.find((e) => Object.keys(e).some((k) => !allowed.has(k)));
   check("没有多余字段", !badKey, badKey && JSON.stringify(badKey));
@@ -404,6 +421,51 @@ const allEvents = [h, h2, h3].flatMap((x) => x.api().info().events);
     Object.keys(e).some((k) => typeof e[k] === "object" && e[k] !== null)
   );
   check("没有对象值（只允许枚举/布尔/数字）", !badValue);
+}
+
+/* ── ⑪ 多 slot：切备选只换开关 slot，teardown 全摘 ── */
+console.log("\n=== ⑪ 多 slot：切备选 / teardown ===");
+{
+  const hs = makeHarness();
+  hs.apply();
+  const before = hs.slotCalls.unregisters;
+  const fbOk = hs.api().fallback();
+  const infos = hs.api().info();
+  check("fallback() 成功", fbOk === true);
+  check("切备选后仍是两个 slot",
+    Object.keys(infos.unregisterBySlot).sort().join(",") ===
+      "conversation.composer.dock,conversation.session.header.utilities",
+    Object.keys(infos.unregisterBySlot).sort().join(","));
+  check("只注销了旧开关 slot", hs.slotCalls.unregisters === before + 1, hs.slotCalls.unregisters);
+  check("slotName 切到备选", infos.slotName === "conversation.session.header.utilities", infos.slotName);
+  check("手动按键 slot 未被切换影响", infos.manualSlotRegistered === true);
+  check("fallback 后注入次数 +1", hs.slotCalls.inject === 3, hs.slotCalls.inject);
+
+  hs.api().teardown();
+  const after = hs.api().info();
+  check("teardown 后 unregisterBySlot 空", Object.keys(after.unregisterBySlot).length === 0, Object.keys(after.unregisterBySlot).length);
+  check("teardown 注销手动 + 备选", hs.slotCalls.unregisters === before + 3, hs.slotCalls.unregisters);
+  check("teardown 复位 slotName", after.slotName === "settings.section", after.slotName);
+  check("teardown 复位 manual 标记", after.manualSlotRegistered === false && after.manualSlotMounted === false);
+}
+
+/* ── ⑫ 上下文停止：ctx.effect disposer → teardown("context-stop") ── */
+console.log("\n=== ⑫ 上下文停止 → ctx.effect disposer 清理 ===");
+{
+  const hc = makeHarness();
+  hc.apply();
+  check("dom setup 注册了 disposer", hc.effectDisposers.length === 1, hc.effectDisposers.length);
+  check("停上下文前 interval 存在", hc.intervals.size === 1, hc.intervals.size);
+  hc.effectDisposers[0](); // 模拟 DSH 停上下文
+  const info = hc.api().info();
+  check("disposed = true", info.disposed === true);
+  check("interval 已清", hc.intervals.size === 0, hc.intervals.size);
+  check("listenerRegistry 清空", info.listenerRegistry.length === 0, info.listenerRegistry.length);
+  check("observer 已 disconnect", hc.observers[0].active === false);
+  check("unregisterBySlot 清空", Object.keys(info.unregisterBySlot).length === 0);
+  check("两个 slot 已注销", hc.slotCalls.unregisters === 2, hc.slotCalls.unregisters);
+  const ev = info.events.find((e) => e.errorType === "cleanup" && e.reason === "context-stop");
+  check("记录 context-stop 清理日志", !!ev);
 }
 
 console.log("\n" + "=".repeat(50));

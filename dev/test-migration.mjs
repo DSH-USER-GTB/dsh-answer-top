@@ -109,7 +109,10 @@ console.log("=== ① 旧键='off' + 新键不存在 → enabled:false ===");
   check("新键已创建", c !== null);
   check("enabled = false（继承旧意图）", c && c.enabled === false, JSON.stringify(c));
   check("旧键被压成 'off'", r.store[LEGACY_KEY] === "off");
-  check("schema 三字段", c && c.v === 1 && Array.isArray(Object.keys(c.sessions)), JSON.stringify(c));
+  check("schema 字段齐全（v/enabled/sessions）", c && c.v === 1 && Array.isArray(Object.keys(c.sessions)), JSON.stringify(c));
+  check("迁移出的配置带默认 threshold",
+    c && c.threshold && c.threshold.ratio === 0.25 && c.threshold.px === 80,
+    JSON.stringify(c && c.threshold));
   const ev = r.api().info().events;
   check("打了 migrated 日志", ev.some((e) => e.errorType === "migrated"), JSON.stringify(ev));
   const mig = ev.find((e) => e.errorType === "migrated");
@@ -178,6 +181,20 @@ console.log("\n=== ⑥ enabled:false 时 scrollToAnswerStart 直接跳过 ===");
   check("forceScroll 返回 false", ok === false, String(ok));
   check("lastSkip = 'disabled'", info.lastSkip === "disabled", String(info.lastSkip));
   check("scrolls 未增加", info.scrolls === 0, String(info.scrolls));
+}
+
+/* ── ⑦ 已存在的旧配置（无 threshold）→ 读时回填，不改写 ── */
+console.log("\n=== ⑦ 旧配置无 threshold → 默认值回填、原样保留 ===");
+{
+  const existing = JSON.stringify({ v: 1, enabled: true, sessions: { a: 1 } });
+  const r = makeRunner({ [CONFIG_KEY]: existing });
+  r.applyOnce();
+  const c = r.api().config();
+  check("config() 回填 threshold {0.25, 80}",
+    JSON.stringify(c.threshold) === '{"ratio":0.25,"px":80}', JSON.stringify(c.threshold));
+  check("sessions 不变", c.sessions && c.sessions.a === 1, JSON.stringify(c.sessions));
+  check("未写盘（原 config 原样保留）", r.store[CONFIG_KEY] === existing);
+  check("内存阈值已应用（px 80）", r.api().info().minBlockPx === 80, String(r.api().info().minBlockPx));
 }
 
 console.log("\n" + "=".repeat(50));

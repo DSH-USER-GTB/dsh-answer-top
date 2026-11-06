@@ -1,13 +1,15 @@
 /**
- * Item 8 验收：兄弟插件共存探测
+ * Item 8 验收：兄弟插件共存探测（v0.12.0 版）
  *
- * 用假 ctx.modules 注入三种名单，验证：
+ * 用假 ctx.modules 注入不同名单，验证：
  *   ① 含 anchor → 自动回滚被闸，forceScroll 仍可用，日志只含布尔
- *   ② 含 jumpButton（id 带 /client 后缀）→ 同样被闸，后缀已归一化
- *   ③ 两者都无 → 正常自动回滚，coexistence 两 false
- *   ④ ctx.modules 缺失 → 探测返回 null、不降级、不抛错
+ *   ② 只装 jump-button → 不再视为冲突，自动回滚正常
+ *   ③ 都没有 → 正常自动回滚，anchor=false
+ *   ④ ctx.modules 缺失 → 探测失败、不降级、不刷日志；恢复后继续工作
  *   ⑤ graphRows Map 兜底路径
- *   ⑥ 幂等：checked 置位后不再重复探测
+ *   ⑥ 自动恢复：有→无恢复、无→有重新闸住，只在变化时记 1 条日志
+ *   ⑦ scope 前缀归一化 + 相似 id 不误判
+ *   ⑧ 日志脱敏
  */
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
@@ -206,9 +208,11 @@ function autoRound(h, n) {
   h.advance(60);
 }
 
+const manifest = (ids) => ({ manifest: { modules: ids.map((id) => ({ id })) } });
+
 const ALLOWED_KEYS = new Set([
   "errorType", "at", "v", "count",
-  "anchor", "jumpButton", "probe",
+  "anchor", "probe",
   "scope", "reason", "rebind",
   "hadLegacyKey", "legacyWasOff", "enabled",
 ]);
@@ -217,18 +221,14 @@ const ALLOWED_KEYS = new Set([
 console.log("=== ① 名单含 dsh-chat-answer-anchor ===");
 {
   const h = makeHarness({
-    modules: {
-      manifest: {
-        modules: [{ id: "dsh-answer-top" }, { id: "dsh-chat-answer-anchor" }],
-      },
-    },
+    modules: manifest(["dsh-answer-top", "dsh-chat-answer-anchor"]),
   });
   h.apply();
   const info = h.api().info();
   check("anchor = true", info.coexistence.anchor === true);
-  check("jumpButton = false", info.coexistence.jumpButton === false);
   check("probe = ok", info.coexistence.probe === "ok", String(info.coexistence.probe));
-  check("尚未定格（checked=false）", info.coexistence.checked === false);
+  check("首次成功后 checked = true", info.coexistence.checked === true);
+  check("已移除 jumpButton 字段", !("jumpButton" in info.coexistence), JSON.stringify(info.coexistence));
   const ids = h.api().moduleIds();
   check("moduleIds 能列出名单", Array.isArray(ids) && ids.indexOf("dsh-chat-answer-anchor") !== -1, JSON.stringify(ids));
   check("diagnose 带共存结果", h.api().diagnose().coexistence.anchor === true);
@@ -243,48 +243,44 @@ console.log("=== ① 名单含 dsh-chat-answer-anchor ===");
   check("forceScroll 仍可用", ok === true, String(ok));
   check("forceScroll 真的滚了", h.api().info().scrolls === 1, String(h.api().info().scrolls));
 
-  h.advance(1500);
-  check("1.5s 后 checked = true", h.api().info().coexistence.checked === true);
-
   const evs = h.coexistEvents();
-  check("记了 coexistence 事件", evs.length >= 1, String(evs.length));
+  check("记了 coexistence 事件", evs.length === 1, String(evs.length));
   check("事件 anchor = true", evs.every((e) => e.anchor === true));
   check("事件字段只有白名单", evs.every((e) => Object.keys(e).every((k) => ALLOWED_KEYS.has(k))), JSON.stringify(evs));
 }
 
-/* ── ② 含 jumpButton（@scope + /client）→ 闸住自动回滚 ── */
-console.log("\n=== ② 名单含 @community/dsh-jump-button/client ===");
+/* ── ② 只装 jump-button → 不再算冲突 ── */
+console.log("\n=== ② 名单只有 @community/dsh-jump-button/client ===");
 {
   const h = makeHarness({
-    modules: { manifest: { modules: [{ id: "@community/dsh-jump-button/client" }] } },
+    modules: manifest(["@community/dsh-jump-button/client"]),
   });
   h.apply();
-  check("scope + 后缀归一化后 jumpButton = true", h.api().info().coexistence.jumpButton === true);
-  check("anchor = false", h.api().info().coexistence.anchor === false);
+  check("anchor = false（不再认 jump-button）", h.api().info().coexistence.anchor === false);
   autoRound(h, 1);
-  check("自动回滚被闸", h.api().info().scrolls === 0, String(h.api().info().scrolls));
-  check("lastSkip 标明 jumpButton", h.api().info().lastSkip === "coexistence(jumpButton)", String(h.api().info().lastSkip));
+  check("自动回滚正常发生", h.api().info().scrolls === 1, String(h.api().info().scrolls));
+  check("lastSkip 为 null", h.api().info().lastSkip === null, String(h.api().info().lastSkip));
+  check("日志 anchor = false", h.coexistEvents().every((e) => e.anchor === false));
 }
 
 /* ── ③ 都不在 → 正常滚 ── */
 console.log("\n=== ③ 名单里没有目标插件 ===");
 {
   const h = makeHarness({
-    modules: { manifest: { modules: [{ id: "dsh-answer-top" }, { id: "dsh-foo" }] } },
+    modules: manifest(["dsh-answer-top", "dsh-foo"]),
   });
   h.apply();
   autoRound(h, 1);
   const info = h.api().info();
-  check("coexistence 两 false", info.coexistence.anchor === false && info.coexistence.jumpButton === false);
+  check("anchor = false", info.coexistence.anchor === false);
   check("自动回滚正常发生", info.scrolls === 1, String(info.scrolls));
   check("lastSkip 为 null", info.lastSkip === null, String(info.lastSkip));
   check("coexistSkips = 0", info.coexistSkips === 0, String(info.coexistSkips));
-  const ev = h.coexistEvents();
-  check("未命中也有日志（两 false）", ev.some((e) => e.anchor === false && e.jumpButton === false), JSON.stringify(ev));
+  check("未命中也有基线日志", h.coexistEvents().some((e) => e.anchor === false), JSON.stringify(h.coexistEvents()));
 }
 
-/* ── ④ ctx.modules 缺失 → null，不降级 ── */
-console.log("\n=== ④ ctx.modules 缺失 ===");
+/* ── ④ ctx.modules 缺失 → 失败不降级、不刷日志、可恢复 ── */
+console.log("\n=== ④ ctx.modules 缺失 → 失败不刷日志 ===");
 {
   const h = makeHarness({ modules: undefined });
   let threw = null;
@@ -293,10 +289,41 @@ console.log("\n=== ④ ctx.modules 缺失 ===");
   check("probe = failed", h.api().info().coexistence.probe === "failed", String(h.api().info().coexistence.probe));
   autoRound(h, 1);
   check("不降级：正常滚动", h.api().info().scrolls === 1, String(h.api().info().scrolls));
-  h.advance(1500);
-  check("复检失败后 checked = true", h.api().info().coexistence.checked === true);
-  const ev = h.coexistEvents();
-  check("失败日志只记 probe", ev.every((e) => e.probe === "failed" && e.anchor === undefined), JSON.stringify(ev));
+
+  const failedEvents = h.coexistEvents().length;
+  check("初始失败只记 1 条", failedEvents === 1, String(failedEvents));
+  h.advance(4000); // 5 轮 tick 都探测失败
+  check("后续失败不刷日志", h.coexistEvents().length === failedEvents, String(h.coexistEvents().length));
+  check("失败期间 probe 仍为 failed", h.api().info().coexistence.probe === "failed");
+
+  // 名单恢复（无 anchor）→ 自动回到 ok
+  h.setModules(manifest(["dsh-foo"]));
+  h.advance(800);
+  check("恢复后 probe = ok", h.api().info().coexistence.probe === "ok", String(h.api().info().coexistence.probe));
+  check("恢复记 1 条基线日志", h.coexistEvents().length === failedEvents + 1, String(h.coexistEvents().length));
+  autoRound(h, 2);
+  check("恢复后仍能正常滚动", h.api().info().scrolls === 2, String(h.api().info().scrolls));
+}
+
+/* ── ④-b ctx.modules 抛异常（inactive）→ 探测失败、不降级、不刷日志 ── */
+console.log("\n=== ④-b 上下文停止 / modules 抛异常 ===");
+{
+  const badModules = {};
+  Object.defineProperty(badModules, "manifest", {
+    get() { throw new Error("context inactive"); },
+  });
+  const h = makeHarness({ modules: badModules });
+  let threw = null;
+  try { h.apply(); } catch (e) { threw = e; }
+  check("apply 不抛错", threw === null, threw && threw.message);
+  check("异常 → probe = failed", h.api().info().coexistence.probe === "failed", String(h.api().info().coexistence.probe));
+  check("异常 → 不降级（anchor = false）", h.api().info().coexistence.anchor === false);
+  autoRound(h, 1);
+  check("异常时自动回滚正常", h.api().info().scrolls === 1, String(h.api().info().scrolls));
+  const failedEvents = h.coexistEvents().length;
+  check("初始失败只记 1 条", failedEvents === 1, String(failedEvents));
+  h.advance(4000);
+  check("后续 tick 异常不刷日志", h.coexistEvents().length === failedEvents, String(h.coexistEvents().length));
 }
 
 /* ── ⑤ graphRows 兜底 ── */
@@ -312,45 +339,57 @@ console.log("\n=== ⑤ graphRows Map 兜底 ===");
   check("自动回滚被闸", h.api().info().scrolls === 0, String(h.api().info().scrolls));
 }
 
-/* ── ⑥ 幂等：checked 后不再探测 ── */
-console.log("\n=== ⑥ checked 后不再重复探测 ===");
+/* ── ⑥ 自动恢复：有 ↔ 无 ── */
+console.log("\n=== ⑥ 同会话自动恢复 / 重新闸住 ===");
 {
-  const h = makeHarness({
-    modules: { manifest: { modules: [{ id: "dsh-foo" }] } },
-  });
+  const h = makeHarness({ modules: manifest(["dsh-chat-answer-anchor"]) });
   h.apply();
-  h.advance(1500);
-  check("首次复检完成", h.api().info().coexistence.checked === true);
-  const before = h.coexistEvents().length;
+  check("初始 anchor = true", h.api().info().coexistence.anchor === true);
+  check("初始 1 条日志", h.coexistEvents().length === 1, String(h.coexistEvents().length));
 
-  // 1.5s 之后兄弟插件才出现（模拟），但不应再探测
-  h.setModules({
-    manifest: { modules: [{ id: "dsh-chat-answer-anchor" }] },
-  });
+  // 有 → 无
+  h.setModules(manifest(["dsh-answer-top"]));
+  h.advance(800);
+  check("移除 anchor 后下一轮 tick 恢复", h.api().info().coexistence.anchor === false);
+  check("恢复时记 1 条日志", h.coexistEvents().length === 2, String(h.coexistEvents().length));
+  autoRound(h, 1);
+  check("恢复后自动回滚真的发生", h.api().info().scrolls === 1, String(h.api().info().scrolls));
+
+  // 无 → 有
+  h.setModules(manifest(["dsh-chat-answer-anchor"]));
+  h.advance(800);
+  check("重新出现 anchor 后再次闸住", h.api().info().coexistence.anchor === true);
+  check("重新闸住记 1 条日志", h.coexistEvents().length === 3, String(h.coexistEvents().length));
+  autoRound(h, 2);
+  check("重新闸住后不再自动滚", h.api().info().scrolls === 1, String(h.api().info().scrolls));
+  check("lastSkip 标明共存", h.api().info().lastSkip === "coexistence(anchor)", String(h.api().info().lastSkip));
+  check("coexistSkips = 1", h.api().info().coexistSkips === 1, String(h.api().info().coexistSkips));
+
+  // 状态稳定时多轮 tick 不再记日志
+  const before = h.coexistEvents().length;
   h.advance(5000);
-  check("不再改判 anchor", h.api().info().coexistence.anchor === false);
-  check("没有新增 coexistence 事件", h.coexistEvents().length === before, h.coexistEvents().length + " vs " + before);
+  check("空闲期间不刷日志", h.coexistEvents().length === before, h.coexistEvents().length + " vs " + before);
+  check("事件序列 true→false→true", JSON.stringify(h.coexistEvents().map((e) => e.anchor)) === "[true,false,true]", JSON.stringify(h.coexistEvents().map((e) => e.anchor)));
 }
 
 /* ── ⑦ scope 前缀归一化（含反例，防止相似 id 误判）── */
 console.log("\n=== ⑦ scope 前缀归一化 ===");
 {
-  const h = makeHarness({
-    modules: {
-      manifest: {
-        modules: [
-          { id: "@community/dsh-chat-answer-anchor" },
-          { id: "@someone/dsh-chat-answer-anchor-extra" },
-        ],
-      },
-    },
-  });
+  const h = makeHarness({ modules: manifest(["@community/dsh-chat-answer-anchor"]) });
   h.apply();
   check("@scope/dsh-chat-answer-anchor 命中", h.api().info().coexistence.anchor === true);
-  check("相似 id 不误判 jumpButton", h.api().info().coexistence.jumpButton === false);
   autoRound(h, 1);
   check("自动回滚被闸", h.api().info().scrolls === 0, String(h.api().info().scrolls));
   check("lastSkip 正确", h.api().info().lastSkip === "coexistence(anchor)", String(h.api().info().lastSkip));
+}
+{
+  const h = makeHarness({
+    modules: manifest(["@someone/dsh-chat-answer-anchor-extra"]),
+  });
+  h.apply();
+  check("相似 id 不误判", h.api().info().coexistence.anchor === false);
+  autoRound(h, 1);
+  check("相似 id 不闸自动回滚", h.api().info().scrolls === 1, String(h.api().info().scrolls));
 }
 
 /* ── ⑧ 日志脱敏 ── */
@@ -358,8 +397,9 @@ console.log("\n=== ⑧ 日志脱敏 ===");
 {
   const events = [];
   for (const mk of [
-    () => makeHarness({ modules: { manifest: { modules: [{ id: "dsh-chat-answer-anchor" }] } } }),
+    () => makeHarness({ modules: manifest(["dsh-chat-answer-anchor"]) }),
     () => makeHarness({ modules: undefined }),
+    () => makeHarness({ modules: manifest(["dsh-foo"]) }),
   ]) {
     const h = mk();
     h.apply();

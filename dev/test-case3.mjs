@@ -1,8 +1,9 @@
 /**
- * R1 验收：case 3 —— smooth 动画中用户输入，显式停止
+ * v0.12.x 瞬时跳转验收
  *
- * 用假 DOM 让 scrollToAnswerStart 真正走到「发起滚动」那一步，
- * 再触发 wheel / scrollend / 700ms 兜底，验证 state.scrolling 的三条复位路径。
+ * scrollTo({behavior:"smooth"}) 在 DSH 新滚动容器（an3WzG_scrollBody）上不生效，
+ * 改为 scrollTop 直接赋值。验证：跳转瞬时完成、不进入动画状态，
+ * wheel / scrollend 不再消耗 cancelCount，也没有 700ms 兜底定时器。
  */
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
@@ -13,6 +14,7 @@ const CONFIG_KEY = "dsh-answer-top:config";
 function makeHarness(opts = {}) {
   const store = { [CONFIG_KEY]: JSON.stringify({ v: 1, enabled: true, sessions: {} }) };
   const bottom = opts.bottom === undefined ? 2000 : opts.bottom;
+  const tailTurn = opts.tailTurn === undefined ? "1" : opts.tailTurn;
 
   /* 假滚动容器 */
   const scrollCalls = [];
@@ -24,11 +26,19 @@ function makeHarness(opts = {}) {
     addEventListener(t, fn) { this._handlers[t] = fn; },
     removeEventListener(t) { delete this._handlers[t]; },
     getBoundingClientRect: () => ({ top: 0, height: 800 }),
-    scrollTo(opts) {
-      scrollCalls.push(opts);
-      if (opts && typeof opts.top === "number") this.scrollTop = opts.top;
+    scrollTo(opts2) {
+      scrollCalls.push(opts2);
+      if (opts2 && typeof opts2.top === "number") this.scrollTop = opts2.top;
     },
   };
+
+  /* 假 tail：turn 可配置，用来验证「识别失败不 fallback:all」 */
+  const tails = tailTurn === null
+    ? []
+    : [{
+        getAttribute: (k) => (k === "data-turn-tail" ? tailTurn : null),
+        hasAttribute: () => true,
+      }];
 
   /* 假 turn 节点：一个 assistant-step，高度由 opts.bottom 控制 */
   const turnNodes = [
@@ -44,8 +54,9 @@ function makeHarness(opts = {}) {
     body: {},
     querySelector: (sel) => (sel === "[data-conversation-scroll]" ? scroller : null),
     querySelectorAll: (sel) => {
-      if (sel.indexOf("[data-chat-turn=") === 0) return turnNodes;
-      if (sel === "[data-turn-tail]") return [];
+      if (sel === "[data-turn-tail]") return tails;
+      if (sel === '[data-chat-turn="1"]') return turnNodes;
+      if (sel.indexOf("[data-chat-turn=") === 0) return [];
       if (sel === "[data-chat-turn]") return turnNodes;
       return [];
     },
@@ -121,72 +132,73 @@ function check(name, cond, detail) {
   else console.log("  ✗ " + name + (detail ? "  → " + detail : ""));
 }
 
-/* ── ① 正常滚动：scrolling=true，走 smooth ── */
-console.log("=== ① 无输入时正常滚到开头 ===");
+/* ── ① 瞬时跳到回答开头 ── */
+console.log("=== ① 瞬时跳转到回答开头 ===");
 {
   const h = makeHarness();
   h.apply();
   const ok = h.api().forceScroll();
   const info = h.api().info();
   check("forceScroll 返回 true", ok === true, String(ok));
-  check("scrolling 置为 true", info.scrolling === true, String(info.scrolling));
-  check("调用了 smooth 滚动", h.scrollCalls.some((c) => c.behavior === "smooth"), JSON.stringify(h.scrollCalls));
-  check("scrollTop 已更新", h.scroller.scrollTop > 0, String(h.scroller.scrollTop));
+  check("不进入动画状态（scrolling=false）", info.scrolling === false, String(info.scrolling));
+  check("scrollTop 直接赋值到 88", h.scroller.scrollTop === 88, String(h.scroller.scrollTop));
+  check("没有调用 scrollTo（无 smooth）", h.scrollCalls.length === 0, h.scrollCalls.length);
+  check("cancelCount = 0", info.cancelCount === 0, String(info.cancelCount));
 }
 
-/* ── ② 动画中滚一下 → 立即停 + cancelCount+1 ── */
-console.log("\n=== ② 动画中用户滚动 → 显式停止 ===");
+/* ── ② wheel 不再中断（没有动画） ── */
+console.log("\n=== ② wheel 不再中断（没有动画） ===");
 {
   const h = makeHarness();
   h.apply();
   h.api().forceScroll();
-  const before = h.scrollCalls.length;
+  const topBefore = h.scroller.scrollTop;
   const cancelBefore = h.api().info().cancelCount;
 
-  h.scroller._handlers.wheel();          // 用户滚动
+  h.scroller._handlers.wheel(); // 用户滚动
 
   const info = h.api().info();
-  const lastCall = h.scrollCalls[h.scrollCalls.length - 1];
-  check("scrolling 已复位", info.scrolling === false, String(info.scrolling));
-  check("cancelCount +1", info.cancelCount === cancelBefore + 1, info.cancelCount + " (was " + cancelBefore + ")");
-  check("追加了一次 auto 滚动（用于中断）", h.scrollCalls.length === before + 1, h.scrollCalls.length + " vs " + before);
-  check("中断用的是 behavior:'auto'", lastCall && lastCall.behavior === "auto", JSON.stringify(lastCall));
-  check("中断时位置不变", lastCall && lastCall.top === h.scroller.scrollTop);
+  check("scrolling 仍为 false", info.scrolling === false, String(info.scrolling));
+  check("cancelCount 不增加", info.cancelCount === cancelBefore, info.cancelCount + " vs " + cancelBefore);
+  check("位置不变", h.scroller.scrollTop === topBefore, h.scroller.scrollTop + " vs " + topBefore);
+  check("没有追加 scrollTo", h.scrollCalls.length === 0, h.scrollCalls.length);
+  check("记录了用户 wheel", info.lastUserInputKind === "wheel");
 }
 
-/* ── ③ scrollend 复位 ── */
-console.log("\n=== ③ scrollend 复位 ===");
+/* ── ③ scrollend 无副作用 ── */
+console.log("\n=== ③ scrollend 无副作用 ===");
 {
   const h = makeHarness();
   h.apply();
   h.api().forceScroll();
-  check("滚动中 scrolling=true", h.api().info().scrolling === true);
+  const topBefore = h.scroller.scrollTop;
   h.scroller._handlers.scrollend();
-  check("scrollend 后 scrolling=false", h.api().info().scrolling === false);
-  check("scrollend 不增加 cancelCount", h.api().info().cancelCount === 0, String(h.api().info().cancelCount));
+  check("scrolling 仍为 false", h.api().info().scrolling === false);
+  check("cancelCount 仍 0", h.api().info().cancelCount === 0, String(h.api().info().cancelCount));
+  check("位置不变", h.scroller.scrollTop === topBefore);
 }
 
-/* ── ④ 700ms 兜底复位（scrollend 不触发） ── */
-console.log("\n=== ④ 700ms 兜底复位 ===");
+/* ── ④ 不再有 700ms 兜底复位 ── */
+console.log("\n=== ④ 不再有 700ms 兜底复位 ===");
 {
   const h = makeHarness();
   h.apply();
   h.api().forceScroll();
-  check("滚动中 scrolling=true", h.api().info().scrolling === true);
+  check("跳转后立即不是动画态", h.api().info().scrolling === false);
   await sleep(780);
-  check("780ms 后 scrolling=false（兜底生效）", h.api().info().scrolling === false);
+  check("780ms 后状态不变", h.api().info().scrolling === false);
 }
 
-/* ── ⑤ 没有动画时滚动 → 不该误取消 ── */
+/* ── ⑤ 非动画期间滚动 → 不该误取消 ── */
 console.log("\n=== ⑤ 非动画期间滚动 → 不消耗 cancelCount ===");
 {
   const h = makeHarness();
   h.apply();
-  const before = h.scrollCalls.length;
+  const topBefore = h.scroller.scrollTop;
   h.scroller._handlers.wheel();   // 没有进行中的动画
   check("scrolling 仍是 false", h.api().info().scrolling === false);
   check("cancelCount 没增加", h.api().info().cancelCount === 0);
-  check("没有多出 scrollTo 调用", h.scrollCalls.length === before, h.scrollCalls.length + " vs " + before);
+  check("位置不变", h.scroller.scrollTop === topBefore);
   check("但 lastUserInputAt 被记录", h.api().info().lastUserInputKind === "wheel");
 }
 
@@ -225,6 +237,28 @@ console.log("\n=== ⑦ 回滚阈值（0.25 / 80px） ===");
   const ok = h.api().forceScroll();
   check("setThreshold 调低后可滚", ok === true, String(ok));
   check("setThreshold 返回新值", JSON.stringify(h.api().setThreshold()) === '{"ratio":0.1,"px":40}', JSON.stringify(h.api().setThreshold()));
+}
+
+/* ── ⑧ turn 识别失败 → 放弃，不 fallback 到全部 ── */
+console.log("\n=== ⑧ turn 识别失败不 fallback:all ===");
+{
+  // tail 存在但 turn=999，没有匹配的 [data-chat-turn="999"]
+  const h = makeHarness({ tailTurn: "999" });
+  h.apply();
+  const ok = h.api().forceScroll();
+  check("未知 turn → forceScroll 返回 false", ok === false, String(ok));
+  check("lastSkip = turn-not-found", h.api().info().lastSkip === "turn-not-found", String(h.api().info().lastSkip));
+  check("没有滚动（不误滚到对话开头）", h.scroller.scrollTop === 0, String(h.scroller.scrollTop));
+  check("没有调用 scrollTo", h.scrollCalls.length === 0, h.scrollCalls.length);
+}
+{
+  // 完全没有 tail（turn 无法识别）
+  const h = makeHarness({ tailTurn: null });
+  h.apply();
+  const ok = h.api().forceScroll();
+  check("无 tail → forceScroll 返回 false", ok === false, String(ok));
+  check("lastSkip = turn-not-found（无 tail）", h.api().info().lastSkip === "turn-not-found", String(h.api().info().lastSkip));
+  check("没有滚动", h.scroller.scrollTop === 0, String(h.scroller.scrollTop));
 }
 
 console.log("\n" + "=".repeat(50));

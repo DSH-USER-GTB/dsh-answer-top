@@ -2,7 +2,50 @@
 
 All notable changes to `dsh-answer-top`.
 
+## [0.12.0]
+
+### Added
+
+- 设置页新增「触发阈值」两个滑块（拖动即生效，自动保存，刷新后保留）：
+  - **最小回答高度**：视口的 5%～100%，默认 25%；
+  - **绝对下限**：0～200px，默认 80px，`?` 图标悬停显示原生提示。
+- 有效阈值 = `max(视口高度 × ratio, px)`，回答高度低于它的不滚。
+- 配置新增 `threshold: { ratio, px }`（schema 仍为 `v: 1`，旧配置读取时自动回填默认值）。
+- 新控制台 API：`threshold()`、`applyThreshold(patch)`（临时）、`saveThreshold(patch)`（持久化）。
+- 设置页在共存命中时显示「检测到 dsh-chat-answer-anchor，已暂停自动回滚」。
+- 输入框下方 dock 新增常驻「⤒ 回滚」手动按钮（`data-dsh-answer-top-manual`）：
+  始终显示，点击直接滚到最后一轮回答开头，不受总开关 / 共存 / 300ms 交互窗口 / 高度阈值限制。
+
+### Changed
+
+- slot 注册重构为按 slot 名记账（`unregisterBySlot`）：开关 slot 与常驻手动按键 slot
+  可以同时挂载、互不覆盖；`fallback()` 只切换开关 slot，`teardown()` 两个一起注销。
+
+- 共存探测只认 `dsh-chat-answer-anchor`：不再把 `dsh-jump-button` 当冲突，只装它时自动回滚照常。
+- 共存检测从「apply 一次 + 1.5s 复检后定格」改为**每 800ms 轮询**：同会话禁用/启用 anchor
+  会自动暂停/恢复自动回滚；只在状态变化时记 1 条事件，探测失败不刷日志。
+- 回滚改为**瞬时跳转**（`scrollTop` 直接赋值）：DSH 新滚动容器
+  （`an3WzG_scrollBody`）上 `scrollTo({behavior:"smooth"})` 不生效；不再需要
+  scrollend / 700ms 兜底复位，`state.scrolling` 保持 false。
+
+### Fixed
+
+- turn 识别失败时不再 fallback 到全部回答块：旧逻辑会挑对话最早的 `assistant-step`，
+  可能误滚到对话开头；现在直接放弃本轮滚动（`lastSkip = "turn-not-found"`），
+  「漏滚一次」好过「误滚打断阅读」。
+- 绝对下限 80px 实际从未生效：阈值常量在 `state` 初始化之后才赋值，
+  `state.minBlockPx` 初始为 `undefined`，小窗口下只剩比例阈值。现在常量先定义，
+  启动即为 `0.25 / 80`。
+- DSH 停上下文后 interval / observer 继续空转、`detectCoexistence` 在 inactive context
+  上反复抛错刷屏：整套 DOM setup 现在挂 `ctx.effect`，disposer 调
+  `teardown("context-stop")`；`detectCoexistence` 整体 try/catch，异常按探测失败处理
+  （不降级、不刷日志）。
+
 ## [0.11.2]
+
+### Fixed
+
+- 修复「思考/空闲时偶发自动上跳」：回答去重从 DOM 节点引用改为 turn 号。DSH 空闲重渲染会替换节点但 turn 不变，旧的节点比较会把同一轮重渲染误判成新回答。
 
 ### Changed
 

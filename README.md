@@ -304,7 +304,7 @@ node dev/simulate.mjs
 node dev/simulate.mjs           :: 加载 + apply + 渲染
 node dev/test-cleanup.mjs       :: 资源清理 + 单实例
 node dev/test-events.mjs        :: 日志持久化 / 折叠 / 轮转
-node dev/test-degrade.mjs       :: 退避保活 + 平台改版
+node dev/test-degrade.mjs       :: 退避保活 + 平台改版 + 恢复重装
 node dev/test-redetect.mjs      :: 同 turn 重渲染不重复滚
 node dev/test-coexist.mjs       :: 共存探测（Item 8）
 node dev/test-user-input.mjs    :: 用户输入取消
@@ -391,6 +391,9 @@ __dshAnswerTop.info().cancelCount
 | 页面卸载（`pagehide`，非 bfcache） | 摘全部监听、`clearInterval`、`MutationObserver.disconnect()`、清空重试/延时 timer、注销 slot | 页面没了，不重启 |
 | DSH 停上下文（`ctx.effect` disposer） | 同全量 teardown，reason = `context-stop` | interval / observer / 监听 / slot 全部停掉，不再空转 |
 | 会话切换（`scroller` 元素被替换） | 只摘 `wheel` / `touchmove` / `scrollend`，重新绑到新容器 | `observer` / `interval` 不重建，继续工作 |
+
+> 平台改版判定降级后不会永久停摆：保留 5s 慢速保活，契约元素恢复后自动重装
+> observer/interval，并记一条 `redetect(contract, recovered)` 脱敏日志。
 
 会话切换是靠「`scroller` 元素身份变化」探测的（800ms 内生效），不依赖 DSH 内部的会话服务钩子，
 所以 DSH 升级改了内部 API 也不会影响这条兜底路径。

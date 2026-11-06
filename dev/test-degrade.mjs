@@ -7,6 +7,7 @@
  *   1. 容器找不到时，observer/input 两条链快重试耗尽后进入「退避慢速保活」，不永久放弃
  *   2. 容器晚到后，慢速保活能恢复安装（回归 v0.10.1 修复的 bug）
  *   3. 契约元素（[data-chat-turn] 与 [data-turn-tail]）连续 10 次为 0 → 停 observer/interval
+ *   4. 降级后慢速保活重检，契约恢复 → 自动重装 observer/interval
  */
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
@@ -174,6 +175,38 @@ console.log("=== 3. 平台改版（连续 10 次契约缺失）===");
   ok(s().installed === false, "已停 observer/interval（installed=false）");
   ok(s().intervalId === null, "intervalId 已清空");
   ok(s().events.some((e) => e.errorType === "degraded" && e.scope === "contract"), "有脱敏 degraded(contract) 日志");
+}
+
+/* ── 测试 4：降级后契约恢复 → 自动重装 ── */
+console.log("=== 4. 契约恢复 → 自动重装 ===");
+{
+  const env = buildEnv({
+    scroller: { addEventListener: () => {} },
+    tails: [{ hasAttribute: () => false }],
+    turns: [{}],
+  });
+  env.getExports().apply(fakeCtx());
+  const s = () => env.sandbox.__dshAnswerTop.info();
+
+  env.tick(); // 契约在场 → contractSeen=true
+  env.setNodes([], []);
+  for (let i = 0; i < 10; i++) env.tick(); // 触发降级
+  ok(s().contractDegraded === true, "已降级");
+  ok(s().installed === false, "降级后 installed=false");
+  ok(typeof s().retryTimersByKind.contract === "number", "5s 保活 timer 已登记在 contract");
+
+  // 契约恢复（tail/turn 重新出现）
+  env.setNodes([{ hasAttribute: () => false }], [{}]);
+  let recovered = false;
+  for (let i = 0; i < 20 && !recovered; i++) {
+    if (!env.fireNextTimer()) break;
+    if (s().installed) recovered = true;
+  }
+  ok(recovered, "契约恢复后自动重装 observer/interval");
+  ok(s().contractDegraded === false, "contractDegraded 已复位");
+  ok(s().contractMisses === 0, "contractMisses 已清零");
+  ok(s().intervalId !== null, "intervalId 已重新建立");
+  ok(s().events.some((e) => e.errorType === "redetect" && e.scope === "contract" && e.reason === "recovered"), "有脱敏 redetect(contract, recovered) 日志");
 }
 
 console.log("\n结果: " + pass + " 通过, " + fail + " 失败");

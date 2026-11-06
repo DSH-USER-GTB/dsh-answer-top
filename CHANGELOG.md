@@ -30,6 +30,8 @@ All notable changes to `dsh-answer-top`.
 
 ### Fixed
 
+- 平台改版降级后不再永久停摆：降级时保留 5s 慢速保活，契约恢复后自动重装
+  observer/interval（记 `redetect` 事件），避免 DSH 改版恢复或临时空 DOM 后插件永久失效。
 - turn 识别失败时不再 fallback 到全部回答块：旧逻辑会挑对话最早的 `assistant-step`，
   可能误滚到对话开头；现在直接放弃本轮滚动（`lastSkip = "turn-not-found"`），
   「漏滚一次」好过「误滚打断阅读」。

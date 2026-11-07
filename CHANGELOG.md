@@ -8,6 +8,28 @@ All notable changes to `dsh-answer-top`.
 
 - 平台改版降级后不再永久停摆：降级时保留 5s 慢速保活，契约恢复后自动重装
   observer/interval（记 `redetect` 事件），避免 DSH 改版恢复或临时空 DOM 后插件永久失效。
+- 重装观察者（平台改版恢复 / 会话切换）时，去重基线只取「最后一个已结束的 tail」：
+  推理中的 turn 不再被当成已处理，结束后能正常回滚；已结束的上一个 turn 仍会被正确去重。
+- 启动跳转后鼠标拖滚动条被误判为「非交互」，导致 `verifyBootJump` 把视图拽回：
+  新增 `scroll` 监听（拖滚动条也会记为 `scroll` 交互），并加 100ms 程序滚动窗口，
+  忽略插件自己 `scrollTop` 赋值触发的 scroll，避免自我污染；
+  只有 `pointerdown → scroll → pointerup` 的拖拽才算用户交互，DSH 自己贴底滚动不再误判。
+- `blockedByUserInput` 排除 `pointerdown`：单纯点一下（聚焦/点窗口）不再打断自动回滚，
+  与启动跳转的判断保持一致；滚轮/触摸/拖滚动条/打字仍会取消。
+- 切回前台时主动补检：`visibilitychange` → visible 后 **150 / 400 / 900ms 三次**跑 tick，
+  把后台完成的回答在用户观察/滚动之前滚掉；多次补检由 handledTurn 去重，不会重复滚；
+  监听随生命周期绑定/清理。
+- 晚滚防护：回答结束检测后、60ms 滚动前，若已出现 `turn + 1`（用户已发下一条），
+  跳过滚动并记 `lastSkip = "newer-turn"`，避免把视图拽回上一条回答；
+  `handledTurn` 仍照常记录，不会反复检测。
+
+### Changed
+
+- `MutationObserver` 回调改为 rAF 合并：同一帧内的多次 mutation 只跑一次 `check(false)`，
+  降低流式输出时的重复布局读取。
+- tick 内的 `getTails()` 复用给 `detectContractRework`，减少一次重复 DOM 查询。
+- `logEvent` 不再向控制台逐条打印事件（保留 localStorage 事件日志与内存 `note()`），
+  减少刷屏与开销。
 
 ## [0.12.0]
 

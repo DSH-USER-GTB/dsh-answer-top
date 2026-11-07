@@ -141,7 +141,13 @@ function makeHarness(opts = {}) {
       sel === "[data-conversation-scroll]" ? scroller : null,
     querySelectorAll: (sel) => {
       if (sel === "[data-turn-tail]") return tails;
-      if (sel.indexOf("[data-chat-turn=") === 0) return turnNodes;
+      if (sel.indexOf("[data-chat-turn=") === 0) {
+        var m = sel.match(/"([^"]+)"/);
+        var lastTurn = tails.length
+          ? tails[tails.length - 1].getAttribute("data-turn-tail")
+          : null;
+        return m && lastTurn !== null && m[1] === String(lastTurn) ? turnNodes : [];
+      }
       if (sel === "[data-chat-turn]") return turnNodes;
       return [];
     },
@@ -253,7 +259,7 @@ h.apply();
   check("intervalId 非空", info.intervalId !== null && info.intervalId !== undefined, String(info.intervalId));
   check("mutationObserver 非空", !!info.mutationObserver);
   check("state.observer = 'body'", info.observer === "body", String(info.observer));
-  check("监听 6 条（scroller 3 + document 2 + pagehide 1）", countListeners(h) === 6, countListeners(h));
+  check("监听 9 条（scroller 4 + document 3 + lifecycle 2）", countListeners(h) === 9, countListeners(h));
   check("boundScroller 记录了 scroller", info.boundScroller === h.scroller());
   check("pendingTimers 只有 8s 提示（共存改为 tick 轮询）", info.pendingTimers.length === 1, info.pendingTimers.length);
   check("retryTimers 为空（一次装好）", info.retryTimers.length === 0, info.retryTimers.length);
@@ -278,7 +284,7 @@ h.apply();
   check("interval 仍只有 1 个", h.intervals.size === 1, h.intervals.size);
   check("observer 仍只有 1 个", h.observers.length === 1, h.observers.length);
   check("slot 注入仍是 2 次（没重复注册）", h.slotCalls.inject === 2, h.slotCalls.inject);
-  check("监听没有翻倍", countListeners(h) === 6, countListeners(h));
+  check("监听没有翻倍", countListeners(h) === 9, countListeners(h));
   check("8s 提示没重复登记", info.pendingTimers.length === 1, info.pendingTimers.length);
 }
 
@@ -308,7 +314,7 @@ h.tickIntervals();
   check("新 scroller 有 wheel", typeof s2._handlers.wheel === "function");
   check("新 scroller 有 touchmove", typeof s2._handlers.touchmove === "function");
   check("新 scroller 有 scrollend", typeof s2._handlers.scrollend === "function");
-  check("监听总数不变（6）", countListeners(h) === 6, countListeners(h));
+  check("监听总数不变（9）", countListeners(h) === 9, countListeners(h));
   check("observer 没重建", h.observers.length === 1, h.observers.length);
   check("interval 没重建", h.intervals.size === 1, h.intervals.size);
   check("scrolling 已复位", info.scrolling === false);
@@ -324,7 +330,7 @@ h.advance(60);
   const info = h.api().info();
   check("detections = 2（每轮 +1）", info.detections === 2, info.detections);
   check("scrolls = 2（每轮 +1）", info.scrolls === 2, info.scrolls);
-  check("监听仍 6 条（没叠加）", countListeners(h) === 6, countListeners(h));
+  check("监听仍 9 条（没叠加）", countListeners(h) === 9, countListeners(h));
 }
 
 /* ── ⑥ pagehide：全量 teardown ── */
@@ -362,7 +368,7 @@ h2.winHandlers.pagehide({ persisted: true });
   check("installed 仍为 true", info.installed === true);
   check("interval 还在", h2.intervals.size === 1, h2.intervals.size);
   check("observer 还连着", h2.observers[0].active === true);
-  check("监听还在", countListeners(h2) === 6, countListeners(h2));
+  check("监听还在", countListeners(h2) === 9, countListeners(h2));
 }
 
 /* ── ⑧ teardown 后可重装 ── */
@@ -374,7 +380,7 @@ h2.apply();
   check("重新 installed", info.installed === true);
   check("新 interval 只有一个", h2.intervals.size === 1, h2.intervals.size);
   check("新 observer 只有一个且连着", h2.observers.length === 2 && h2.observers[1].active === true, h2.observers.length);
-  check("监听重新绑定", countListeners(h2) === 6, countListeners(h2));
+  check("监听重新绑定", countListeners(h2) === 9, countListeners(h2));
   check("slot 重新注册（两个 slot × 2 轮）", h2.slotCalls.inject === 4, h2.slotCalls.inject);
 }
 
@@ -395,7 +401,7 @@ h3.apply();
   const after = h3.api().info();
   check("重试后已安装", after.installed === true);
   check("重试表已清零", after.retryTimers.length === 0, after.retryTimers.length);
-  check("监听已绑定", after.listenerRegistry.length === 6, after.listenerRegistry.length);
+  check("监听已绑定", after.listenerRegistry.length === 9, after.listenerRegistry.length);
   check("只有一个 interval", h3.intervals.size === 1, h3.intervals.size);
   check("只有一个 observer", h3.observers.length === 1, h3.observers.length);
 }

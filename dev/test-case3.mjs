@@ -33,12 +33,13 @@ function makeHarness(opts = {}) {
   };
 
   /* 假 tail：turn 可配置，用来验证「识别失败不 fallback:all」 */
-  const tails = tailTurn === null
-    ? []
-    : [{
-        getAttribute: (k) => (k === "data-turn-tail" ? tailTurn : null),
-        hasAttribute: () => true,
-      }];
+  function makeTail(turn, revealed) {
+    return {
+      getAttribute: (k) => (k === "data-turn-tail" ? turn : null),
+      hasAttribute: (k) => (k === "data-actions-reveal" ? !!revealed : false),
+    };
+  }
+  let tails = tailTurn === null ? [] : [makeTail(tailTurn, true)];
 
   /* 假 turn 节点：一个 assistant-step，高度由 opts.bottom 控制 */
   const turnNodes = [
@@ -47,16 +48,21 @@ function makeHarness(opts = {}) {
       getBoundingClientRect: () => ({ top: 100, bottom }),
     },
   ];
+  const knownTurns = { "1": turnNodes };
+  function addTurnNodes(turn) { knownTurns[String(turn)] = turnNodes; }
 
   const docHandlers = {};
   const document = {
     readyState: "complete",
+    visibilityState: "visible",
     body: {},
     querySelector: (sel) => (sel === "[data-conversation-scroll]" ? scroller : null),
     querySelectorAll: (sel) => {
       if (sel === "[data-turn-tail]") return tails;
-      if (sel === '[data-chat-turn="1"]') return turnNodes;
-      if (sel.indexOf("[data-chat-turn=") === 0) return [];
+      if (sel.indexOf("[data-chat-turn=") === 0) {
+        var m = sel.match(/"([^"]+)"/);
+        return m && knownTurns[m[1]] ? knownTurns[m[1]] : [];
+      }
       if (sel === "[data-chat-turn]") return turnNodes;
       return [];
     },
@@ -120,6 +126,10 @@ function makeHarness(opts = {}) {
     apply: () => exportsObj.apply(ctx),
     api: () => sandbox.__dshAnswerTop,
     scroller, scrollCalls, docHandlers, store,
+    setTails: (list) => { tails = list || []; },
+    makeTail,
+    addTurnNodes,
+    setVisibility: (v) => { document.visibilityState = v; },
   };
 }
 
@@ -259,6 +269,54 @@ console.log("\n=== ⑧ turn 识别失败不 fallback:all ===");
   check("无 tail → forceScroll 返回 false", ok === false, String(ok));
   check("lastSkip = turn-not-found（无 tail）", h.api().info().lastSkip === "turn-not-found", String(h.api().info().lastSkip));
   check("没有滚动", h.scroller.scrollTop === 0, String(h.scroller.scrollTop));
+}
+
+console.log("\n=== ⑨ 切回前台 → 补检后台完成的回答 ===");
+{
+  const h = makeHarness();
+  h.apply();
+  const info = h.api().info();
+  info.bootJumpDone = true;
+  check("checkTick 已注册", typeof info.checkTick === "function");
+
+  h.setVisibility("hidden");
+  h.addTurnNodes("2");
+  h.setTails([h.makeTail("1", true), h.makeTail("2", true)]); // 后台完成 turn 2
+  h.docHandlers["doc:visibilitychange"]();
+  await sleep(320);
+  check("hidden 时不检测", info.detections === 0, info.detections);
+
+  h.setVisibility("visible");
+  h.docHandlers["doc:visibilitychange"]();
+  await sleep(300); // 150ms 首轮补检 + 60ms 滚动
+  check("visible 后 150ms 首轮补检", info.detections === 1, info.detections);
+  check("后台完成的回答被滚到开头", h.scroller.scrollTop === 88, h.scroller.scrollTop);
+
+  await sleep(700); // 400/900ms 后续抢跑点
+  check("后续抢跑点不重复检测", info.detections === 1, info.detections);
+  check("后续抢跑点不重复滚", h.scroller.scrollTop === 88, h.scroller.scrollTop);
+}
+
+console.log("\n=== ⑩ 检测晚到（已有更新 turn）→ 不滚 ===");
+{
+  const h = makeHarness();
+  h.apply();
+  const info = h.api().info();
+  info.bootJumpDone = true;
+  h.addTurnNodes("2");
+  h.addTurnNodes("3");
+  h.setTails([h.makeTail("1", true), h.makeTail("2", true)]);
+
+  info.checkTick(true); // 检测到 turn 2 结束，60ms 后才滚
+  await sleep(120); // 60ms 滚动点已过，此时 turn 3 节点已出现（用户发了下一条）
+
+  check("检测计数仍为 1", info.detections === 1, info.detections);
+  check("lastSkip = newer-turn", info.lastSkip === "newer-turn", String(info.lastSkip));
+  check("没有滚动", h.scroller.scrollTop === 0, h.scroller.scrollTop);
+
+  info.checkTick(true); // handledTurn 已设好 → 不再重复检测
+  await sleep(80);
+  check("同一 turn 不再重复检测", info.detections === 1, info.detections);
 }
 
 console.log("\n" + "=".repeat(50));

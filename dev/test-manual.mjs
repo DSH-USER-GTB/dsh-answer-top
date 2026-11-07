@@ -201,16 +201,16 @@ console.log("\n=== B. 总开关关闭 + 共存命中 → 手动仍滚 ===");
   check("瞬时跳转（没有 scrollTo）", h.scrollCalls.length === 0, h.scrollCalls.length);
 }
 
-/* ── D：pointerdown 窗口内，自动被拦、手动可用 ── */
-console.log("\n=== C. pointerdown 窗口内：自动被拦、手动可用 ===");
+/* ── D：wheel 交互窗口内，自动被拦、手动可用 ── */
+console.log("\n=== C. wheel 窗口内：自动被拦、手动可用 ===");
 {
   const h2 = makeHarness({ enabled: true, anchor: false });
   h2.apply();
-  h2.docHandlers.pointerdown();
+  h2.scroller._handlers.wheel(); // 真实阅读/滚动
 
   const autoOk = h2.api().forceScroll();
   check("自动路径被交互窗口拦下", autoOk === false, autoOk);
-  check("lastSkip 标明 user-input", String(h2.api().info().lastSkip).indexOf("user-input(pointerdown") === 0, h2.api().info().lastSkip);
+  check("lastSkip 标明 user-input", String(h2.api().info().lastSkip).indexOf("user-input(wheel") === 0, h2.api().info().lastSkip);
 
   const tree = h2.components[MANUAL_SLOT]({});
   tree.props.onClick();

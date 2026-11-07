@@ -121,7 +121,13 @@ function makeHarness(opts = {}) {
     querySelector: (sel) => (sel === "[data-conversation-scroll]" ? scroller : null),
     querySelectorAll: (sel) => {
       if (sel === "[data-turn-tail]") return tails;
-      if (sel.indexOf("[data-chat-turn=") === 0) return turnNodes;
+      if (sel.indexOf("[data-chat-turn=") === 0) {
+        var m = sel.match(/"([^"]+)"/);
+        var lastTurn = tails.length
+          ? tails[tails.length - 1].getAttribute("data-turn-tail")
+          : null;
+        return m && lastTurn !== null && m[1] === String(lastTurn) ? turnNodes : [];
+      }
       if (sel === "[data-chat-turn]") return turnNodes;
       return [];
     },

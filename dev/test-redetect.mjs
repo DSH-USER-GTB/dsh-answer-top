@@ -6,6 +6,7 @@
  * 覆盖：
  *   1. 同一 turn 号、新 DOM 节点 → 不重复检测（v0.11.2 修复的「思考时误上跳」）
  *   2. 新 turn 号 → 正常检测一次
+ *   3. 安装时最后一轮未结束 → 结束后正常检测（不把推理中 turn 当已处理）
  */
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
@@ -135,6 +136,27 @@ console.log("=== 2. 新 turn 号 → 正常检测一次 ===");
 env.setTails([tail("11", true)]);
 env.tick();
 ok(info().detections === 1, "新 turn 检测一次（实际 " + info().detections + "）");
+
+console.log("=== 3. 安装时最后一轮未结束 → 结束后正常检测 ===");
+{
+  const env2 = buildEnv();
+  // 安装时：turn 50 已完成，turn 51 还在推理（无 data-actions-reveal）
+  env2.setTails([tail("50", true), tail("51", false)]);
+  env2.getExports().apply(fakeCtx());
+  const s = () => env2.sandbox.__dshAnswerTop.info();
+  s().bootJumpDone = true; // 关掉 boot jump，避免干扰 detections
+
+  env2.tick(); // 51 仍在推理
+  ok(s().detections === 0, "未结束不检测（实际 " + s().detections + "）");
+
+  env2.setTails([tail("50", true), tail("51", true)]); // 51 结束
+  env2.tick();
+  ok(s().detections === 1, "51 结束后检测一次（实际 " + s().detections + "）");
+
+  env2.setTails([tail("50", true), tail("51", true)]); // 同 turn 再重渲染
+  env2.tick();
+  ok(s().detections === 1, "同一 turn 重渲染不重复检测（实际 " + s().detections + "）");
+}
 
 console.log("\n结果: " + pass + " 通过, " + fail + " 失败");
 process.exit(fail === 0 ? 0 : 1);

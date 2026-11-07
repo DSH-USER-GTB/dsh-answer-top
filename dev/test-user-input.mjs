@@ -140,13 +140,14 @@ function skipReason(r) {
   check("case4 原因里带 keydown", String(reason).includes("keydown"), String(reason));
 }
 
-/* ── case 5：300ms 内点击（选文字）→ 本轮不滚 ── */
+/* ── case 5：300ms 内点击（聚焦/点窗口）→ 不算主动交互 ── */
 {
   const r = makeRunner();
   r.apply();
   r.docHandlers["doc:pointerdown"]();
   const reason = skipReason(r);
-  check("case5 pointerdown 后立即滚 → 拦截", String(reason).startsWith("user-input"), String(reason));
+  check("case5 pointerdown 后立即滚 → 不拦截", !String(reason).startsWith("user-input"), String(reason));
+  check("case5 pointerdown 仍被记录", r.api().info().lastUserInputKind === "pointerdown", String(r.api().info().lastUserInputKind));
 }
 
 /* ── case 6：交互超过 300ms → 恢复滚动 ── */
@@ -199,6 +200,24 @@ function skipReason(r) {
 
   r.docHandlers["doc:keydown"]({ key: "F12" });
   check("case10 F12 不记为交互", r.api().info().lastUserInputAt === before);
+}
+
+/* ── 拖滚动条才算交互；DSH 自己滚动不算 ── */
+{
+  const r = makeRunner();
+  r.apply();
+  const before = r.api().info().lastUserInputAt;
+  r.scrollHandlers.scroll(); // DSH 自己滚（无 pointerdown）
+  check("纯 scroll 不记用户交互", r.api().info().lastUserInputAt === before, r.api().info().lastUserInputAt + " vs " + before);
+
+  r.docHandlers["doc:pointerdown"](); // 开始拖滚动条
+  r.scrollHandlers.scroll();
+  check("拖拽中的 scroll 记为交互", r.api().info().lastUserInputKind === "scroll", String(r.api().info().lastUserInputKind));
+
+  r.docHandlers["doc:pointerup"](); // 拖拽结束
+  const after = r.api().info().lastUserInputAt;
+  r.scrollHandlers.scroll();
+  check("pointerup 后纯 scroll 又忽略", r.api().info().lastUserInputAt === after, r.api().info().lastUserInputAt + " vs " + after);
 }
 
 console.log("\n" + "=".repeat(50));

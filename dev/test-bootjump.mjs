@@ -74,8 +74,9 @@ function makeHarness(opts = {}) {
   const scroller = {
     clientHeight: 800,
     scrollHeight: 6000,
-    addEventListener() {},
-    removeEventListener() {},
+    _handlers: {},
+    addEventListener(t, fn) { this._handlers[t] = fn; },
+    removeEventListener(t) { delete this._handlers[t]; },
     getBoundingClientRect: () => ({ top: 0, height: 800 }),
     /** 模拟 DSH 贴底：改位置但不算插件滚动 */
     setScrollTop(v) { scrollTopValue = v; },
@@ -136,7 +137,13 @@ function makeHarness(opts = {}) {
     querySelector: (sel) => (sel === "[data-conversation-scroll]" ? scroller : null),
     querySelectorAll: (sel) => {
       if (sel === "[data-turn-tail]") return tails;
-      if (sel.indexOf("[data-chat-turn=") === 0) return turnNodes;
+      if (sel.indexOf("[data-chat-turn=") === 0) {
+        var m = sel.match(/"([^"]+)"/);
+        var lastTurn = tails.length
+          ? tails[tails.length - 1].getAttribute("data-turn-tail")
+          : null;
+        return m && lastTurn !== null && m[1] === String(lastTurn) ? turnNodes : [];
+      }
       if (sel === "[data-chat-turn]") return turnNodes;
       return [];
     },
@@ -202,6 +209,7 @@ function makeHarness(opts = {}) {
     setScrollHeight: (v) => { scroller.scrollHeight = v; },
     replaceTail,
     observers,
+    docHandlers,
     advance,
   };
 }
@@ -426,6 +434,41 @@ console.log("\n=== ⑭ 同一轮重渲染不重复跳 ===");
   h.advance(2400);
   check("同一 turn 重渲染不再滚", h.scrollCalls.length === before, h.scrollCalls.length);
   check("detections 仍为 0", h.api().info().detections === 0, h.api().info().detections);
+}
+
+/* ── ⑮ 鼠标拖滚动条（scroll 事件）→ 不拽回 ── */
+console.log("\n=== ⑮ 拖滚动条后启动跳转不再拽回 ===");
+{
+  const h = makeHarness();
+  h.addTail(1);
+  h.apply();
+  h.advance(2400); // 首次跳转完成
+  const afterJump = h.scrollCalls.length;
+  check("首次已跳", afterJump === 1, afterJump);
+
+  const info = h.api().info();
+  const inputBefore = info.lastUserInputAt;
+  info.programmaticScrollUntil = Date.now() + 5000;
+  h.scroller._handlers.scroll(); // 程序滚动窗口内 → 忽略
+  check("程序滚动窗口内 scroll 不算用户交互", info.lastUserInputAt === inputBefore, info.lastUserInputAt + " vs " + inputBefore);
+
+  info.programmaticScrollUntil = 0; // 模拟 >100ms 后
+  h.scroller.setScrollTop(5000); // DSH 布局贴底造成 drift
+  h.scroller._handlers.scroll(); // DSH 自己滚动（无 pointerdown）
+  check("DSH 自己滚动不算用户交互", info.lastUserInputAt === inputBefore, info.lastUserInputAt + " vs " + inputBefore);
+  check("lastUserInputKind 未变成 scroll", info.lastUserInputKind !== "scroll", String(info.lastUserInputKind));
+
+  info.bootJumpAt = Date.now() - 50; // 模拟用户是在跳转后 50ms 才拖滚动条
+  h.docHandlers.pointerdown(); // 开始拖滚动条
+  h.scroller.setScrollTop(5000);
+  h.scroller._handlers.scroll();
+  h.docHandlers.pointerup(); // 拖拽结束
+  check("拖拽中的 scroll 被记为用户交互", info.lastUserInputKind === "scroll", String(info.lastUserInputKind));
+
+  h.advance(1200); // verifyBootJump 检查
+  check("拖滚动条后不再重跳", h.scrollCalls.length === afterJump, h.scrollCalls.length + " vs " + afterJump);
+  check("bootJumpRetries 未增加", info.bootJumpRetries === 0, String(info.bootJumpRetries));
+  check("bootJumpSkip 不是 retry-exhausted", info.bootJumpSkip !== "retry-exhausted", String(info.bootJumpSkip));
 }
 
 console.log("\n" + "=".repeat(50));

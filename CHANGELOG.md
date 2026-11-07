@@ -2,7 +2,7 @@
 
 All notable changes to `dsh-answer-top`.
 
-## [0.12.1]
+## [1.0.0]
 
 ### Fixed
 
